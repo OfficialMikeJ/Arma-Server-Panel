@@ -756,6 +756,11 @@ model PlatformSettings {
   /// on first boot and never derived from anything identifying.
   telemetryInstanceId   String?
   telemetryLastSentAt   DateTime?
+  /// Whatever the project website returned on the last check-in: the latest
+  /// released version, and any broadcast notice. This is the return half of
+  /// the exchange - the site cannot reach into a panel behind NAT, so it
+  /// answers on the connection the panel opened.
+  telemetryLastResponse Json?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 

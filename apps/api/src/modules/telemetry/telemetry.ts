@@ -94,6 +94,45 @@ export async function collectPayload(): Promise<TelemetryPayload> {
   };
 }
 
+export interface TelemetryReply {
+  /** Newest released panel version, so an operator learns an update exists. */
+  latestVersion: string | null;
+  /** Optional broadcast notice, e.g. a security advisory. */
+  message: string | null;
+  receivedAt: string;
+}
+
+/**
+ * Parses the website's reply.
+ *
+ * Treated as untrusted input: it is bounded, type-checked, and only ever
+ * *displayed*. Nothing in a reply can cause the panel to install, download or
+ * execute anything - a compromised telemetry endpoint must not become remote
+ * code execution on every deployment.
+ */
+function parseReply(body: string): TelemetryReply | null {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+
+    const latestVersion =
+      typeof parsed.latestVersion === 'string' && /^[0-9a-zA-Z.\-+]{1,32}$/.test(parsed.latestVersion)
+        ? parsed.latestVersion
+        : null;
+
+    const message =
+      typeof parsed.message === 'string' && parsed.message.length > 0
+        ? // Stripped of control characters and hard-capped before it can reach
+          // a log line or an admin's screen.
+          parsed.message.replace(/[\p{Cc}\p{Cf}]/gu, '').slice(0, 500)
+        : null;
+
+    if (!latestVersion && !message) return null;
+    return { latestVersion, message, receivedAt: new Date().toISOString() };
+  } catch {
+    return null;
+  }
+}
+
 /** Sends one report. Returns false on any failure, without throwing. */
 export async function sendReport(): Promise<boolean> {
   const config = loadConfig();
@@ -115,10 +154,28 @@ export async function sendReport(): Promise<boolean> {
       return false;
     }
 
+    // The return half of the exchange. The website cannot open a connection to
+    // a panel sitting behind NAT, so anything it wants to tell us comes back
+    // on the request we made.
+    const reply = parseReply(response.body);
+
     await prisma.platformSettings.update({
       where: { id: 1 },
-      data: { telemetryLastSentAt: new Date() },
+      data: {
+        telemetryLastSentAt: new Date(),
+        telemetryLastResponse: (reply ?? undefined) as never,
+      },
     });
+
+    if (reply?.latestVersion && reply.latestVersion !== PANEL_VERSION) {
+      logger.info(
+        { current: PANEL_VERSION, latest: reply.latestVersion },
+        'A newer version of the panel is available',
+      );
+    }
+    if (reply?.message) {
+      logger.info({ notice: reply.message }, 'Notice from the project website');
+    }
 
     logger.debug('Telemetry report sent');
     return true;

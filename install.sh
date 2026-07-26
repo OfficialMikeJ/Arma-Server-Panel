@@ -34,9 +34,9 @@ DOWNLOAD_BASE="${ASP_DOWNLOAD_BASE:-https://armaserverpanel.io}"
 INSTALL_DIR="${ASP_INSTALL_DIR:-/opt/arma-server-panel}"
 CHANNEL="${ASP_CHANNEL:-stable}"
 
-# Source of the files. A git URL avoids needing a hosted release tarball, which
-# is what makes bootstrapping the website itself possible.
-REPO="${ASP_REPO:-}"
+# Source of the files. Cloning from git means the website only has to hand out
+# this script - it does not have to host release tarballs as well.
+REPO="${ASP_REPO:-https://github.com/OfficialMikeJ/Arma-Server-Panel.git}"
 BRANCH="${ASP_BRANCH:-main}"
 
 # panel = the control panel. site = the public website that hosts this script.
