@@ -1,6 +1,7 @@
 'use client';
 
 import { use, useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { RESOURCE_LIMITS, formatMemory, formatStorage } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
 import { ServerTabs } from '@/components/panel/ServerTabs';
@@ -15,6 +16,7 @@ import { ServerTabs } from '@/components/panel/ServerTabs';
  */
 export default function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
 
   const [name, setName] = useState('');
   const [autoStart, setAutoStart] = useState(false);
@@ -34,6 +36,10 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [error, setError] = useState<string | null>(null);
   const [details, setDetails] = useState<Array<{ path: string; message: string }>>([]);
   const [notice, setNotice] = useState<string | null>(null);
+
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState('');
+  const [purgeData, setPurgeData] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -120,6 +126,22 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     } catch (caught) {
       fail(caught, 'Could not update resources.');
     } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteServer() {
+    setBusy('delete');
+    setError(null);
+    setDetails([]);
+    try {
+      // The API requires the typed name too - this is not a client-side-only
+      // guard, so a stray API call cannot delete a server either.
+      await api.delete(`/servers/${id}`, { confirmation: deleteConfirm, purgeData });
+      router.push('/panel');
+      router.refresh();
+    } catch (caught) {
+      fail(caught, 'The server could not be deleted.');
       setBusy(null);
     }
   }
@@ -265,6 +287,73 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
         <button type="button" className="btn-primary w-full" onClick={() => void saveConfig()} disabled={busy !== null}>
           {busy === 'config' ? 'Saving…' : 'Save configuration'}
         </button>
+      </section>
+
+      {/* ---- Delete ---- */}
+      <section className="card border-power-stop/40">
+        <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-power-stop">
+          Delete this server
+        </h2>
+        <p className="mb-3 text-xs leading-relaxed text-ink-800">
+          Stops and removes the container, releases its ports, and deletes every file belonging to
+          it — configs, mods, saves and logs. This cannot be undone.
+        </p>
+
+        {!showDelete ? (
+          <button type="button" className="btn-stop" onClick={() => setShowDelete(true)}>
+            Delete server
+          </button>
+        ) : (
+          <div className="space-y-3">
+            <label className="flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-ink-900">
+              <input
+                type="checkbox"
+                checked={purgeData}
+                onChange={(event) => setPurgeData(event.target.checked)}
+                className="mt-0.5 accent-brand-500"
+              />
+              <span>
+                Also delete the server&apos;s files. Untick to keep them on disk and only remove the
+                container and its database record.
+              </span>
+            </label>
+
+            <div>
+              <label className="label" htmlFor="delete-confirm">
+                Type <span className="font-mono text-brand-400">{name}</span> to confirm
+              </label>
+              <input
+                id="delete-confirm"
+                className="input"
+                value={deleteConfirm}
+                onChange={(event) => setDeleteConfirm(event.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                className="btn-stop flex-1"
+                disabled={deleteConfirm !== name || busy !== null}
+                onClick={() => void deleteServer()}
+              >
+                {busy === 'delete' ? 'Deleting…' : 'Delete permanently'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setShowDelete(false);
+                  setDeleteConfirm('');
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {notice ? (
