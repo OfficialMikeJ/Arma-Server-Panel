@@ -28,6 +28,7 @@ import {
 } from '../docker/container-spec.js';
 import {
   createContainer,
+  ensureGameImage,
   inspectContainer,
   killContainer,
   removeContainer,
@@ -323,6 +324,10 @@ export async function provisionServer(serverId: string): Promise<void> {
   emitPanelNotice(serverId, `Provisioning ${GAMES[gameId].name} server...`);
 
   try {
+    // Built on first use rather than at install time - these images are large
+    // and there is no reason to build Arma 3's for someone running Reforger.
+    await ensureGameImage(gameId, (line) => emitPanelNotice(serverId, line));
+
     const allocations = await prisma.portAllocation.findMany({ where: { serverId } });
 
     await createContainer({

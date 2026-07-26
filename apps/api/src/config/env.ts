@@ -94,6 +94,13 @@ const envSchema = z
     /** Root directory on this host for game server volumes. */
     DATA_ROOT: z.string().min(1).default('/var/lib/arma-server-panel/servers'),
 
+    /**
+     * Where the per-game Dockerfiles live, as seen from inside the API
+     * container. Compose mounts the repository's docker/ directory here so the
+     * panel can build a game image the first time it is needed.
+     */
+    GAME_IMAGE_ROOT: z.string().min(1).default('/opt/asp/docker'),
+
     /** Steam credentials for downloading the Arma 3 dedicated server. */
     STEAM_USERNAME: z.string().optional(),
     STEAM_PASSWORD: z.string().optional(),

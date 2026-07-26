@@ -566,6 +566,9 @@ finish() {
   printf '   Choose the "Administrator" tab. You will be required to change\n'
   printf '   this password and enrol two-factor before anything else opens.\n\n'
   printf '   %sDo not expose this panel to the internet until you have.%s\n\n' "$C_YELLOW" "$C_RESET"
+  printf '   Game server images are built the first time you create a server\n'
+  printf '   of that game. Expect several minutes on that first create - you\n'
+  printf '   can watch it on the server console. Nothing to do now.\n\n'
   printf '   Manage it with:\n'
   printf '     cd %s\n' "$INSTALL_DIR"
   printf '     docker compose logs -f      # watch\n'

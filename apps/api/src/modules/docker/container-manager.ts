@@ -8,6 +8,10 @@
 
 import type Docker from 'dockerode';
 import type { Duplex, Readable } from 'node:stream';
+import path from 'node:path';
+import { access } from 'node:fs/promises';
+import { getGame, type GameId } from '@asp/shared';
+import { loadConfig } from '../../config/env.js';
 import { requireDocker } from './docker-client.js';
 import {
   SERVER_NETWORK_NAME,
@@ -374,4 +378,79 @@ export async function imageExists(image: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Builds a game server image if it is not already present.
+ *
+ * These images are large and slow to build (SteamCMD downloads the whole game
+ * server package), so they are built on first use rather than at install time.
+ * Someone who only ever runs Reforger should not wait for the Arma 3 image.
+ *
+ * `onProgress` receives build output line by line, which the caller pipes into
+ * the server console so the operator can watch rather than stare at a spinner.
+ */
+export async function ensureGameImage(
+  gameId: GameId,
+  onProgress?: (line: string) => void,
+): Promise<void> {
+  const game = getGame(gameId);
+  const image = game.image;
+
+  if (await imageExists(image)) return;
+
+  const config = loadConfig();
+  const contextDir = path.join(config.GAME_IMAGE_ROOT, gameId);
+
+  // A clear message here beats a raw ENOENT from the Docker daemon.
+  try {
+    await access(path.join(contextDir, 'Dockerfile'));
+  } catch {
+    throw serviceUnavailable(
+      `The build files for ${game.name} are not available to the panel ` +
+        `(looked in ${contextDir}). Check that the repository's docker/ directory is mounted ` +
+        `into the API container.`,
+    );
+  }
+
+  const docker = await requireDocker();
+  onProgress?.(`Building the ${game.name} server image. This takes several minutes the first time.`);
+  logger.info({ image, contextDir }, 'Building game image');
+
+  const stream = await docker.buildImage(
+    { context: contextDir, src: ['Dockerfile', 'entrypoint.sh'] },
+    { t: image, rm: true, forcerm: true },
+  );
+
+  await new Promise<void>((resolve, reject) => {
+    docker.modem.followProgress(
+      stream,
+      (error: Error | null, output: Array<Record<string, unknown>>) => {
+        if (error) return reject(error);
+
+        // followProgress resolves even when the build failed; the failure is
+        // reported as an `error` entry in the output stream.
+        const failure = output.find((entry) => typeof entry.error === 'string');
+        if (failure) {
+          return reject(new Error(String(failure.error).slice(0, 500)));
+        }
+        resolve();
+      },
+      (event: Record<string, unknown>) => {
+        if (typeof event.stream === 'string') {
+          const line = event.stream.trim();
+          if (line) onProgress?.(line);
+        } else if (typeof event.error === 'string') {
+          onProgress?.(`Build error: ${event.error}`);
+        }
+      },
+    );
+  });
+
+  if (!(await imageExists(image))) {
+    throw serviceUnavailable(`The ${game.name} image failed to build.`);
+  }
+
+  onProgress?.(`${game.name} image built.`);
+  logger.info({ image }, 'Game image built');
 }

@@ -80,10 +80,15 @@ services:
       TRUST_PROXY: ${TRUST_PROXY:-false}
       TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
       REQUIRE_SECURE_COOKIES: ${REQUIRE_SECURE_COOKIES:-true}
+      GAME_IMAGE_ROOT: /opt/asp/docker
     volumes:
       # Required to create and supervise game containers.
       - /var/run/docker.sock:/var/run/docker.sock
       - ${DATA_ROOT:-./data/servers}:/var/lib/arma-server-panel/servers
+      # Build contexts for the game images. The panel builds an image the first
+      # time a server of that game is created, so it needs the Dockerfiles.
+      # Read-only: the panel builds from these, it never writes to them.
+      - ./docker:/opt/asp/docker:ro
     ports:
       - "${API_HOST_PORT:-3004}:4000"
     networks:
