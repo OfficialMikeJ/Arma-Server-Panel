@@ -44,13 +44,34 @@ export const adminPasswordSchema = z
     'Password contains a well-known weak phrase',
   );
 
-/** Server names are shown publicly, so keep them printable and bounded. */
+/**
+ * Server names.
+ *
+ * Deliberately permissive: real Arma server names carry Discord invites, tags,
+ * separators and emoji, and an allowlist of "safe looking" punctuation just
+ * breaks legitimate names like
+ *   "TDE Survival NA #1 - https://discord.gg/xxxx For mod List"
+ *
+ * What is excluded is what is genuinely dangerous or meaningless in a name:
+ * control characters, format/bidi overrides (which can visually reorder text
+ * to disguise one name as another), and line separators.
+ *
+ * Everything else is safe because each destination escapes for its own format:
+ * Arma's cfg via cfgString(), Reforger's JSON via JSON.stringify, UPnP SOAP via
+ * xmlEscape(), Discord via escapeDiscord(), and the browser via React's own
+ * escaping. Nothing interpolates a name into a shell.
+ *
+ * 96 characters is the tighter of the two game limits (Arma 3 hostname).
+ */
 export const serverNameSchema = z
   .string()
   .trim()
   .min(3)
-  .max(64)
-  .regex(/^[\p{L}\p{N} .,'\-_|[\]()!#:+]+$/u, 'Server name contains unsupported characters');
+  .max(96)
+  .refine(
+    (value) => !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value),
+    'Server name cannot contain control or text-direction characters',
+  );
 
 /* ------------------------------------------------------------------ */
 /* Auth                                                                */
