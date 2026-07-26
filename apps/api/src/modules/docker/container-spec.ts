@@ -146,13 +146,16 @@ export function buildContainerSpec(input: ContainerSpecInput): Docker.ContainerC
       SecurityOpt: [
         // The single most important flag here: setuid binaries cannot raise
         // privileges, which neuters most container-escape chains.
+        //
+        // seccomp and AppArmor are deliberately NOT listed. Docker applies its
+        // default profiles for both unless told otherwise, so naming them adds
+        // nothing - and `seccomp=default` is not even valid syntax, since that
+        // field expects a profile path or inline JSON.
         'no-new-privileges:true',
-        'seccomp=default',
-        'apparmor=docker-default',
       ],
       // Explicitly deny access to every host device.
       Devices: [],
-      DeviceCgroupRules: ['c *:* rwm'].slice(0, 0),
+      DeviceCgroupRules: [],
       GroupAdd: [],
 
       /* ---- CPU ---- */
