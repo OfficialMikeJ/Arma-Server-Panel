@@ -27,8 +27,8 @@ RUN mkdir -p /opt/steamcmd \
 FROM debian:bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG UID=10000
-ARG GID=10000
+ARG UID=1000
+ARG GID=1000
 
 # Enfusion runtime dependencies, matching Reforger. Adjust on launch if the
 # real requirements differ.
@@ -55,7 +55,7 @@ RUN groupadd --gid ${GID} steam \
 COPY --chown=steam:steam entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0555 /usr/local/bin/entrypoint.sh
 
-USER 10000:10000
+USER 1000:1000
 WORKDIR /home/steam/server
 
 # Set once Bohemia publishes the dedicated server app id.

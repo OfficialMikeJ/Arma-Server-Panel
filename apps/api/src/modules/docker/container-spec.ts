@@ -39,9 +39,19 @@ export interface ContainerSpecInput {
   ownerId: string;
 }
 
-/** uid/gid the game process runs as inside the container. */
-export const CONTAINER_UID = 10_000;
-export const CONTAINER_GID = 10_000;
+/**
+ * uid/gid the game process runs as inside the container.
+ *
+ * Must match the user the API container runs as (`node`, uid 1000), because
+ * both write into the same server volume: the API writes config files, the
+ * game writes saves, logs and downloaded content. A mismatch means the game
+ * server cannot write to its own directory at all.
+ *
+ * Still unprivileged - the point is that it is not root, not that it is an
+ * unusual number.
+ */
+export const CONTAINER_UID = 1000;
+export const CONTAINER_GID = 1000;
 
 /** Where the server's data volume is mounted inside the container. */
 export const CONTAINER_DATA_PATH = '/home/steam/server';

@@ -14,6 +14,8 @@ import { getGame, type GameId } from '@asp/shared';
 import { loadConfig } from '../../config/env.js';
 import { requireDocker } from './docker-client.js';
 import {
+  CONTAINER_GID,
+  CONTAINER_UID,
   SERVER_NETWORK_NAME,
   buildContainerSpec,
   buildNetworkSpec,
@@ -312,7 +314,7 @@ export async function execInContainer(
     AttachStderr: true,
     AttachStdin: false,
     Tty: false,
-    User: options.user ?? '10000:10000',
+    User: options.user ?? `${CONTAINER_UID}:${CONTAINER_GID}`,
     Env: [],
   });
 

@@ -29,8 +29,8 @@ RUN mkdir -p /opt/steamcmd \
 FROM debian:bookworm-slim
 
 ARG DEBIAN_FRONTEND=noninteractive
-ARG UID=10000
-ARG GID=10000
+ARG UID=1000
+ARG GID=1000
 
 # Arma 3's Linux server binary needs the 32-bit loader for SteamCMD and a small
 # set of 64-bit runtime libraries for the server itself.
@@ -56,7 +56,7 @@ RUN groupadd --gid ${GID} steam \
 COPY --chown=steam:steam entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod 0555 /usr/local/bin/entrypoint.sh
 
-USER 10000:10000
+USER 1000:1000
 WORKDIR /home/steam/server
 
 ENV STEAM_APP_ID=233780 \
