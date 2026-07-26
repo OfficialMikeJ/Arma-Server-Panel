@@ -159,11 +159,42 @@ export async function measureThroughput(): Promise<ThroughputResult> {
 
   // Sequential, not parallel: running both at once would have them compete for
   // the same link and understate each other.
-  const downloadMbps = await measureDownload(config.SPEEDTEST_DOWNLOAD_URL);
-  const uploadMbps = await measureUpload(config.SPEEDTEST_UPLOAD_URL);
+  //
+  // Measured independently so one failing direction does not discard a
+  // perfectly good result for the other - reporting "not measured" for both
+  // when only the upload endpoint was unreachable is unhelpful and hides the
+  // real problem.
+  let downloadMbps = 0;
+  let uploadMbps = 0;
+  const failures: string[] = [];
+
+  try {
+    downloadMbps = await measureDownload(config.SPEEDTEST_DOWNLOAD_URL);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown error';
+    failures.push(`download: ${reason}`);
+    logger.warn({ err: error, url: config.SPEEDTEST_DOWNLOAD_URL }, 'Download measurement failed');
+  }
+
+  try {
+    uploadMbps = await measureUpload(config.SPEEDTEST_UPLOAD_URL);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown error';
+    failures.push(`upload: ${reason}`);
+    logger.warn({ err: error, url: config.SPEEDTEST_UPLOAD_URL }, 'Upload measurement failed');
+  }
+
+  if (failures.length === 2) {
+    // Both directions failed - this is a connectivity problem, not a slow link.
+    throw new Error(`Throughput could not be measured (${failures.join('; ')})`);
+  }
 
   logger.info(
-    { downloadMbps: Math.round(downloadMbps), uploadMbps: Math.round(uploadMbps) },
+    {
+      downloadMbps: Math.round(downloadMbps),
+      uploadMbps: Math.round(uploadMbps),
+      failures: failures.length > 0 ? failures : undefined,
+    },
     'Throughput measured',
   );
 

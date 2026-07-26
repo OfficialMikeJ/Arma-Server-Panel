@@ -53,6 +53,11 @@ services:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
+    # The API runs as an unprivileged user, so it needs the host's docker group
+    # to reach /var/run/docker.sock. The gid differs per distribution - find
+    # yours with:  stat -c '%g' /var/run/docker.sock
+    group_add:
+      - ${DOCKER_GID:-999}
     depends_on:
       postgres:
         condition: service_healthy

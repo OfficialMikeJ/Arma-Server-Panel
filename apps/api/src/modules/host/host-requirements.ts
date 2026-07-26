@@ -116,6 +116,7 @@ export async function evaluateHostRequirements(
 
   let throughput: ThroughputResult | null = null;
   let networkStale = false;
+  let throughputError: string | null = null;
 
   const cachedAt = settings.lastSpeedTestAt?.getTime() ?? 0;
   const cacheValid = Date.now() - cachedAt < HOST_REQUIREMENTS.speedTestTtlMs;
@@ -132,6 +133,9 @@ export async function evaluateHostRequirements(
       throughput = await measureThroughput();
       await updatePlatformSettings({ lastSpeedTestAt: throughput.measuredAt });
     } catch (error) {
+      // Surfaced to the operator rather than swallowed: "not measured" with no
+      // reason is the least useful thing this check could say.
+      throughputError = error instanceof Error ? error.message : 'measurement failed';
       logger.warn({ err: error }, 'Throughput measurement failed');
       throughput = null;
     }
@@ -146,19 +150,22 @@ export async function evaluateHostRequirements(
     networkStale = throughput === null;
   }
 
+  // When measurement failed, say why instead of just "not measured".
+  const unmeasured = throughputError ? `failed - ${throughputError}`.slice(0, 120) : 'not measured';
+
   checks.push(
     {
       key: 'download',
       label: 'Download throughput',
       required: formatMbps(HOST_REQUIREMENTS.minDownloadMbps),
-      detected: throughput ? formatMbps(Math.round(throughput.downloadMbps)) : 'not measured',
+      detected: throughput ? formatMbps(Math.round(throughput.downloadMbps)) : unmeasured,
       pass: throughput !== null && throughput.downloadMbps >= HOST_REQUIREMENTS.minDownloadMbps,
     },
     {
       key: 'upload',
       label: 'Upload throughput',
       required: formatMbps(HOST_REQUIREMENTS.minUploadMbps),
-      detected: throughput ? formatMbps(Math.round(throughput.uploadMbps)) : 'not measured',
+      detected: throughput ? formatMbps(Math.round(throughput.uploadMbps)) : unmeasured,
       pass: throughput !== null && throughput.uploadMbps >= HOST_REQUIREMENTS.minUploadMbps,
     },
   );
