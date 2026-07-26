@@ -1,0 +1,26 @@
+# Shell scripts and Dockerfiles MUST use LF. A CRLF entrypoint fails inside a
+# Linux container with "bad interpreter: /bin/sh^M", which is a confusing way
+# to spend an afternoon.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Caddyfile       text eol=lf
+entrypoint.sh   text eol=lf
+
+# Everything else: normalise on commit, checkout native.
+*.ts            text
+*.tsx           text
+*.js            text
+*.mjs           text
+*.json          text
+*.md            text
+*.yml           text
+*.yaml          text
+*.css           text
+*.prisma        text
+*.sql           text
+
+# Binary
+*.png           binary
+*.jpg           binary
+*.woff2         binary

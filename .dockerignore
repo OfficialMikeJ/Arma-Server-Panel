@@ -1,0 +1,31 @@
+# Keep the build context small and platform-clean.
+#
+# node_modules must never enter the context: it contains natively-compiled
+# binaries (Argon2, Prisma engines) built for the developer's OS, which would
+# shadow the correct Linux ones installed inside the image.
+
+node_modules
+**/node_modules
+
+.next
+**/.next
+dist
+**/dist
+*.tsbuildinfo
+
+.git
+.gitignore
+_upload
+
+.env
+.env.*
+!.env.example
+
+data
+volumes
+storage
+logs
+*.log
+
+README.md
+SECURITY.md

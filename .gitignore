@@ -1,0 +1,44 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Environment / secrets - never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+data/
+
+# Runtime state
+logs/
+*.log
+npm-debug.log*
+.pnpm-debug.log*
+
+# Server volumes (game data lives here)
+volumes/
+storage/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# The public website is NOT part of the panel distribution.
+#
+# This repository is what panel operators download and run. The project's own
+# website is separate infrastructure - it exists to hand out the install
+# command and to display deployment counters, and has no business being in
+# someone else's install.
+# ---------------------------------------------------------------------------
+apps/site/
+docker/site/
+docker-compose.site.yml

@@ -1,0 +1,19 @@
+{
+  "name": "@asp/relay",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Relay daemon that gives self-hosted Arma servers a public endpoint without exposing the host's IP address",
+  "main": "dist/relay.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/relay.ts",
+    "start": "node dist/relay.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

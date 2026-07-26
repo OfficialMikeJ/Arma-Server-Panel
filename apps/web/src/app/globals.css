@@ -1,0 +1,145 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  }
+
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-ink-0 text-white antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* A visible focus ring everywhere. Keyboard users must be able to see where
+     they are - especially on a panel with destructive buttons. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500 ring-offset-2 ring-offset-ink-0;
+  }
+
+  ::selection {
+    @apply bg-brand-500 text-white;
+  }
+
+  /* Scrollbars, dark to match the console. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-ink-100;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded bg-ink-500;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-600;
+  }
+}
+
+@layer components {
+  /* --- Buttons ------------------------------------------------------ */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 text-xs font-bold
+           uppercase tracking-wide transition-all duration-150
+           disabled:cursor-not-allowed disabled:opacity-40;
+    min-height: 2.5rem;
+  }
+
+  /* Orange button, white text - the primary action everywhere. */
+  .btn-primary {
+    @apply btn bg-brand-500 text-white shadow-brand hover:bg-brand-600 active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply btn border border-ink-400 bg-ink-200 text-ink-950 hover:border-ink-500 hover:bg-ink-300;
+  }
+
+  .btn-ghost {
+    @apply btn text-ink-900 hover:bg-ink-200 hover:text-white;
+  }
+
+  /* --- Server power controls ---------------------------------------- */
+  /* Fixed meanings: green start, red stop, yellow restart, blue reinstall. */
+
+  .btn-power {
+    @apply btn text-white shadow-lg active:scale-[0.98];
+  }
+  .btn-start {
+    @apply btn-power bg-power-start hover:bg-power-startHover;
+  }
+  .btn-stop {
+    @apply btn-power bg-power-stop hover:bg-power-stopHover;
+  }
+  .btn-restart {
+    /* Yellow needs dark text to stay readable. */
+    @apply btn-power bg-power-restart text-ink-0 hover:bg-power-restartHover;
+  }
+  .btn-reinstall {
+    @apply btn-power bg-power-reinstall hover:bg-power-reinstallHover;
+  }
+
+  /* --- Surfaces ------------------------------------------------------ */
+
+  .card {
+    @apply rounded-xl border border-ink-300 bg-ink-100 p-6;
+  }
+
+  .card-hover {
+    @apply card transition-colors hover:border-brand-500/40;
+  }
+
+  .input {
+    @apply w-full rounded-md border border-ink-400 bg-ink-200 px-3 py-2 text-sm text-white
+           placeholder:text-ink-700 focus:border-brand-500 focus:outline-none
+           focus:ring-1 focus:ring-brand-500;
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-800;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide;
+  }
+
+  .section-title {
+    @apply text-lg font-extrabold uppercase tracking-wide md:text-xl lg:text-[22px];
+  }
+
+  /* Frosted panel used over the hero and section imagery. */
+  .glass {
+    @apply rounded-xl bg-black/50 shadow-xl backdrop-blur-xl;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Console output: preserve whitespace, wrap long lines, never overflow. */
+  .console-line {
+    @apply whitespace-pre-wrap break-all font-mono text-[12.5px] leading-[1.55];
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

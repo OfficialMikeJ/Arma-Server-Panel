@@ -1,0 +1,763 @@
+// Arma Server Panel - data model
+//
+// Security notes that the schema itself enforces:
+//   * No column ever stores a plaintext secret. Passwords are Argon2id hashes,
+//     session/API tokens are SHA-256 digests, TOTP secrets and third-party
+//     credentials are AES-256-GCM ciphertext blobs (see src/security/crypto.ts).
+//   * `canonicalUsername` is unique so homoglyph/separator squatting is blocked.
+//   * AuditLog rows are hash-chained (prevHash -> hash) so tampering is detectable.
+
+generator client {
+  provider = "prisma-client-js"
+  // Pinned explicitly. Prisma otherwise sniffs the OpenSSL version at generate
+  // time, and in a slim build image with no openssl binary present it guesses
+  // 1.1.x - which then fails at runtime on Debian Bookworm (OpenSSL 3.0).
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/* ------------------------------------------------------------------ */
+/* Identity                                                            */
+/* ------------------------------------------------------------------ */
+
+enum AccountType {
+  USER
+  ADMIN
+}
+
+enum AccountStatus {
+  PENDING_TOTP
+  ACTIVE
+  SUSPENDED
+  DISABLED
+}
+
+model Account {
+  id                String        @id @default(cuid())
+  type              AccountType   @default(USER)
+  status            AccountStatus @default(PENDING_TOTP)
+
+  /// Display form, exactly as the user typed it.
+  username          String        @unique
+  /// Lowercased, separator-stripped form. Uniqueness is enforced here.
+  canonicalUsername String        @unique
+
+  /// Argon2id hash. Only ever set for ADMIN accounts - users are TOTP-only.
+  passwordHash      String?
+  /// Forces the change-password screen before anything else is reachable.
+  mustChangePassword Boolean      @default(false)
+  passwordChangedAt DateTime?
+
+  /// AES-256-GCM envelope containing the RFC 6238 shared secret.
+  totpSecretEnc     Bytes?
+  totpEnrolledAt    DateTime?
+  /// Highest TOTP time-step already accepted. Blocks code replay.
+  totpLastStep      BigInt?
+  /// TOTP is mandatory for every account; this records that it is satisfied.
+  totpVerified      Boolean       @default(false)
+
+  discordId         String?       @unique
+  discordUsername   String?
+  discordAvatar     String?
+  /// AES-256-GCM envelope of the Discord refresh token, when offline access is granted.
+  discordRefreshEnc Bytes?
+
+  isPlatformOwner   Boolean       @default(false)
+
+  failedAuthCount   Int           @default(0)
+  lastFailedAuthAt  DateTime?
+  lockedUntil       DateTime?
+
+  lastLoginAt       DateTime?
+  lastLoginIpHash   String?
+
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
+
+  sessions          Session[]
+  recoveryCodes     RecoveryCode[]
+  apiKeys           ApiKey[]
+  ownedServers      Server[]       @relation("ServerOwner")
+  memberships       ServerMember[]
+  auditEntries      AuditLog[]
+  aiProviders       AiProvider[]
+  notifications     Notification[]
+
+  @@index([status])
+  @@index([discordId])
+  @@map("accounts")
+}
+
+model RecoveryCode {
+  id        String    @id @default(cuid())
+  accountId String
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  /// Argon2id hash of the code. The plaintext is shown exactly once.
+  codeHash  String
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([accountId])
+  @@map("recovery_codes")
+}
+
+model Session {
+  id             String   @id @default(cuid())
+  accountId      String
+  account        Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the opaque bearer token. The raw token exists only in the cookie.
+  tokenHash      String   @unique
+  /// Bound to the CSRF cookie value for double-submit verification.
+  csrfTokenHash  String
+
+  /// Truncated + salted client fingerprint. Not reversible to an IP address.
+  ipHash         String
+  userAgentHash  String
+
+  /// Elevated sessions get much shorter timeouts.
+  elevated       Boolean  @default(false)
+
+  issuedAt       DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+  rotatedAt      DateTime @default(now())
+  /// Hard expiry. Enforced regardless of activity.
+  absoluteExpiresAt DateTime
+  revokedAt      DateTime?
+  revokedReason  String?
+
+  @@index([accountId])
+  @@index([absoluteExpiresAt])
+  @@map("sessions")
+}
+
+/// Short-lived, single-use tokens for multi-step auth flows (TOTP enrolment,
+/// login challenge, Discord link, admin step-up).
+enum ChallengeKind {
+  TOTP_ENROLLMENT
+  LOGIN_TOTP
+  DISCORD_LINK
+  ADMIN_STEP_UP
+  PASSWORD_RESET
+}
+
+model AuthChallenge {
+  id         String        @id @default(cuid())
+  kind       ChallengeKind
+  tokenHash  String        @unique
+  accountId  String?
+  /// Opaque JSON payload, encrypted at rest.
+  payloadEnc Bytes?
+  attempts   Int           @default(0)
+  maxAttempts Int          @default(5)
+  consumedAt DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime      @default(now())
+
+  @@index([expiresAt])
+  @@map("auth_challenges")
+}
+
+/* ------------------------------------------------------------------ */
+/* Registration abuse control                                          */
+/* ------------------------------------------------------------------ */
+
+enum UsernameAttemptOutcome {
+  ACCEPTED
+  REJECTED_POLICY
+  REJECTED_ABUSIVE
+  REJECTED_TAKEN
+}
+
+/// One row per username submitted during registration. Drives the
+/// warn-once-then-ban rule: submitting the *same* rejected name twice results
+/// in a two hour registration ban for that client.
+model UsernameAttempt {
+  id           String                 @id @default(cuid())
+  /// Salted hash of the client identity (IP + optional Discord id).
+  clientHash   String
+  /// Screening-normalised form of the attempted username.
+  normalized   String
+  /// Exactly what was typed, retained for the abuse audit trail only.
+  rawUsername  String
+  outcome      UsernameAttemptOutcome
+  reason       String?
+  warned       Boolean                @default(false)
+  createdAt    DateTime               @default(now())
+
+  @@index([clientHash, normalized])
+  @@index([createdAt])
+  @@map("username_attempts")
+}
+
+model RegistrationBan {
+  id         String   @id @default(cuid())
+  clientHash String
+  reason     String
+  /// The normalised username that triggered the ban.
+  trigger    String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([clientHash, expiresAt])
+  @@map("registration_bans")
+}
+
+/* ------------------------------------------------------------------ */
+/* Rate limiting / lockouts                                            */
+/* ------------------------------------------------------------------ */
+
+/// Durable counter used when Redis is not configured. Also the source of truth
+/// for limits that must survive an API restart (registration, reinstall).
+model RateCounter {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@map("rate_counters")
+}
+
+/* ------------------------------------------------------------------ */
+/* Infrastructure                                                      */
+/* ------------------------------------------------------------------ */
+
+enum NodeStatus {
+  PROVISIONING
+  ONLINE
+  DEGRADED
+  OFFLINE
+  MAINTENANCE
+}
+
+/// A physical or virtual machine that runs game containers.
+model Node {
+  id                String     @id @default(cuid())
+  name              String     @unique
+  region            String
+  /// Human-readable location shown on the marketing site.
+  locationLabel     String
+  status            NodeStatus @default(PROVISIONING)
+
+  /// Docker endpoint. Unix socket path or a mutual-TLS https endpoint.
+  dockerEndpoint    String
+  /// AES-256-GCM envelope of the client certificate bundle for remote Docker.
+  dockerTlsEnc      Bytes?
+
+  /// Absolute path on the node where server volumes live.
+  dataRoot          String
+
+  /// Measured/declared capacity.
+  totalCpuThreads   Int
+  totalMemoryMib    Int
+  totalStorageGib   Int
+  downloadMbps      Int
+  uploadMbps        Int
+
+  /// Fraction of capacity the panel refuses to allocate past. No overselling.
+  cpuOvercommit     Float      @default(1.0)
+  memoryOvercommit  Float      @default(1.0)
+
+  /// Address players connect to. Never an operator's raw home IP unless they
+  /// explicitly opted out of relay mode.
+  publicHost        String
+  /// True when traffic egresses through a relay so the host IP stays private.
+  relayEnabled      Boolean    @default(false)
+  relayEndpoint     String?
+
+  portRangeStart    Int        @default(20000)
+  portRangeEnd      Int        @default(40000)
+
+  /// Result of the mandatory host-requirements gate.
+  requirementsPass  Boolean    @default(false)
+  requirementsCheckedAt DateTime?
+  lastSpeedTestAt   DateTime?
+
+  lastHeartbeatAt   DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  servers           Server[]
+  portAllocations   PortAllocation[]
+
+  @@map("nodes")
+}
+
+/* ------------------------------------------------------------------ */
+/* Game servers                                                        */
+/* ------------------------------------------------------------------ */
+
+enum GameTitle {
+  ARMA3
+  REFORGER
+  ARMA4
+}
+
+enum ServerState {
+  CREATING
+  INSTALLING
+  OFFLINE
+  STARTING
+  RUNNING
+  STOPPING
+  RESTARTING
+  REINSTALLING
+  CRASHED
+  SUSPENDED
+  DELETING
+}
+
+model Server {
+  id             String      @id @default(cuid())
+  name           String
+  description    String?
+  game           GameTitle
+  state          ServerState @default(CREATING)
+
+  ownerId        String
+  owner          Account     @relation("ServerOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  nodeId         String
+  node           Node        @relation(fields: [nodeId], references: [id], onDelete: Restrict)
+
+  /// Docker container id, null until first provisioned.
+  containerId    String?     @unique
+  /// Deterministic container name: asp-<shortId>.
+  containerName  String      @unique
+  /// Absolute path of this server's data volume on the node.
+  volumePath     String
+
+  // ---- Resource allocation ----
+  cpuCores       Float
+  cpuSet         String?
+  memoryMib      Int
+  storageGib     Int
+  bandwidthMbps  Int
+  transferQuotaGib Int       @default(0)
+  slots          Int
+
+  // ---- Networking ----
+  basePort       Int
+  publicHost     String
+  publicBasePort Int
+  useRelay       Boolean     @default(false)
+  autoPortForward Boolean    @default(true)
+
+  // ---- Behaviour ----
+  autoStart      Boolean     @default(false)
+  autoRestart    Boolean     @default(true)
+  crashRestartLimit Int      @default(5)
+  crashCount     Int         @default(0)
+  suspended      Boolean     @default(false)
+  suspendReason  String?
+
+  // ---- Game configuration ----
+  /// Validated game config as JSON. Rendered to the game's native format on start.
+  config         Json        @default("{}")
+  /// Operator-supplied startup flags, restricted to the game's allowlist.
+  startupParams  Json        @default("{}")
+  /// AES-256-GCM envelope holding RCON/admin passwords.
+  secretsEnc     Bytes?
+
+  installedVersion String?
+  lastInstallAt  DateTime?
+  lastStartedAt  DateTime?
+  lastStoppedAt  DateTime?
+
+  playersOnline  Int         @default(0)
+  lastQueryAt    DateTime?
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  deletedAt      DateTime?
+
+  members        ServerMember[]
+  mods           ServerMod[]
+  ports          PortAllocation[]
+  metrics        MetricSample[]
+  consoleLines   ConsoleLine[]
+  integrations   Integration[]
+  backups        Backup[]
+  bandwidthUsage BandwidthUsage[]
+  aiSessions     AiSession[]
+  events         ServerEvent[]
+
+  @@index([ownerId])
+  @@index([nodeId])
+  @@index([state])
+  @@map("servers")
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+model ServerMember {
+  id         String     @id @default(cuid())
+  serverId   String
+  server     Server     @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  accountId  String
+  account    Account    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  role       MemberRole @default(VIEWER)
+  /// Explicit permission list. Null means "use the role default".
+  permissions String[]  @default([])
+  invitedById String?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@unique([serverId, accountId])
+  @@index([accountId])
+  @@map("server_members")
+}
+
+/* ------------------------------------------------------------------ */
+/* Mods                                                                */
+/* ------------------------------------------------------------------ */
+
+model ServerMod {
+  id        String   @id @default(cuid())
+  serverId  String
+  server    Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  /// Steam published file id, or Reforger workshop GUID.
+  modId     String
+  name      String
+  /// Pinned version, or null to track latest.
+  version   String?
+  enabled   Boolean  @default(true)
+  order     Int
+  required  Boolean  @default(false)
+  sizeBytes BigInt?
+  installedVersion String?
+  installedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([serverId, modId])
+  @@index([serverId, order])
+  @@map("server_mods")
+}
+
+model ModPreset {
+  id        String    @id @default(cuid())
+  name      String
+  game      GameTitle
+  ownerId   String
+  /// Array of ModEntry objects.
+  mods      Json      @default("[]")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([ownerId, game])
+  @@map("mod_presets")
+}
+
+/* ------------------------------------------------------------------ */
+/* Networking                                                          */
+/* ------------------------------------------------------------------ */
+
+enum PortMethod {
+  DIRECT
+  UPNP
+  NATPMP
+  PCP
+  RELAY
+  MANUAL
+}
+
+model PortAllocation {
+  id            String     @id @default(cuid())
+  nodeId        String
+  node          Node       @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  serverId      String?
+  server        Server?    @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  /// Logical port name from the game definition, e.g. "game", "a2s".
+  portKey       String
+  protocol      String
+  internalPort  Int
+  externalPort  Int
+
+  method        PortMethod @default(DIRECT)
+  active        Boolean    @default(false)
+  /// Lease expiry for UPnP/NAT-PMP/PCP mappings so they can be renewed.
+  leaseExpiresAt DateTime?
+  /// Result of the last external reachability probe.
+  reachable     Boolean?
+  lastVerifiedAt DateTime?
+  message       String?
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([nodeId, externalPort, protocol])
+  @@index([serverId])
+  @@index([leaseExpiresAt])
+  @@map("port_allocations")
+}
+
+/* ------------------------------------------------------------------ */
+/* Telemetry                                                           */
+/* ------------------------------------------------------------------ */
+
+model MetricSample {
+  id              BigInt   @id @default(autoincrement())
+  serverId        String
+  server          Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  at              DateTime @default(now())
+  /// Null for raw samples; set to the bucket width in seconds once rolled up.
+  bucketSeconds   Int?
+  cpuPercent      Float
+  memoryBytes     BigInt
+  memoryLimitBytes BigInt
+  diskBytes       BigInt
+  netRxBytes      BigInt
+  netTxBytes      BigInt
+  playersOnline   Int      @default(0)
+  fps             Float?
+
+  @@index([serverId, at])
+  @@map("metric_samples")
+}
+
+model BandwidthUsage {
+  id        BigInt   @id @default(autoincrement())
+  serverId  String
+  server    Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  /// First instant of the accounting period (month).
+  periodStart DateTime
+  rxBytes   BigInt   @default(0)
+  txBytes   BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([serverId, periodStart])
+  @@map("bandwidth_usage")
+}
+
+model ConsoleLine {
+  id       BigInt   @id @default(autoincrement())
+  serverId String
+  server   Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  seq      BigInt
+  at       DateTime @default(now())
+  stream   String
+  text     String
+
+  @@index([serverId, seq])
+  @@index([at])
+  @@map("console_lines")
+}
+
+model ServerEvent {
+  id        BigInt   @id @default(autoincrement())
+  serverId  String
+  server    Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  at        DateTime @default(now())
+  kind      String
+  message   String
+  data      Json?
+
+  @@index([serverId, at])
+  @@map("server_events")
+}
+
+model Backup {
+  id         String   @id @default(cuid())
+  serverId   String
+  server     Server   @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  name       String
+  path       String
+  sizeBytes  BigInt   @default(0)
+  /// SHA-256 of the archive, verified before any restore.
+  checksum   String?
+  status     String   @default("pending")
+  createdById String?
+  createdAt  DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([serverId])
+  @@map("backups")
+}
+
+/* ------------------------------------------------------------------ */
+/* Integrations, API keys, AI                                          */
+/* ------------------------------------------------------------------ */
+
+enum IntegrationKind {
+  DISCORD_WEBHOOK
+  PUSHOVER
+  GENERIC_WEBHOOK
+}
+
+model Integration {
+  id         String          @id @default(cuid())
+  serverId   String
+  server     Server          @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  kind       IntegrationKind
+  label      String
+  enabled    Boolean         @default(true)
+  /// AES-256-GCM envelope of webhook URLs / tokens.
+  secretsEnc Bytes
+  events     String[]        @default([])
+  lastSentAt DateTime?
+  failureCount Int           @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([serverId])
+  @@map("integrations")
+}
+
+model ApiKey {
+  id           String    @id @default(cuid())
+  accountId    String
+  account      Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  label        String
+  /// SHA-256 of the raw key. Shown to the operator exactly once.
+  keyHash      String    @unique
+  /// Non-secret prefix so keys are identifiable in a list.
+  keyPrefix    String
+  permissions  String[]  @default([])
+  /// Empty means "all servers this account can reach".
+  serverIds    String[]  @default([])
+  allowedCidrs String[]  @default([])
+  lastUsedAt   DateTime?
+  lastUsedIpHash String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([accountId])
+  @@map("api_keys")
+}
+
+model AiProvider {
+  id                String   @id @default(cuid())
+  accountId         String
+  account           Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  provider          String
+  label             String
+  model             String
+  baseUrl           String?
+  /// AES-256-GCM envelope of the operator's own API key.
+  apiKeyEnc         Bytes
+  /// Non-secret last four characters, for identification in the UI.
+  apiKeyHint        String
+  enabled           Boolean  @default(true)
+  /// Permissions the assistant may exercise without a human confirming each step.
+  autonomousActions String[] @default([])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sessions          AiSession[]
+
+  @@index([accountId])
+  @@map("ai_providers")
+}
+
+model AiSession {
+  id         String     @id @default(cuid())
+  providerId String
+  provider   AiProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  serverId   String
+  server     Server     @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  accountId  String
+  question   String
+  /// Redacted transcript. Secrets are stripped before storage.
+  transcript Json       @default("[]")
+  /// Actions the assistant proposed, and whether a human approved them.
+  proposedActions Json  @default("[]")
+  tokensIn   Int        @default(0)
+  tokensOut  Int        @default(0)
+  status     String     @default("open")
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  @@index([serverId])
+  @@map("ai_sessions")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  kind      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([accountId, readAt])
+  @@map("notifications")
+}
+
+/* ------------------------------------------------------------------ */
+/* Audit                                                               */
+/* ------------------------------------------------------------------ */
+
+/// Append-only, hash-chained audit trail. Each row's `hash` covers its own
+/// content plus the previous row's hash, so removing or editing an entry
+/// invalidates every entry after it.
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  at          DateTime @default(now())
+  accountId   String?
+  account     Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+  /// Retained even after the account is deleted.
+  actorLabel  String
+  action      String
+  targetType  String?
+  targetId    String?
+  /// Salted hash - the raw address is never stored.
+  ipHash      String?
+  userAgentHash String?
+  outcome     String   @default("success")
+  metadata    Json?
+
+  prevHash    String
+  hash        String   @unique
+
+  @@index([at])
+  @@index([accountId, at])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
+
+/* ------------------------------------------------------------------ */
+/* Platform state                                                      */
+/* ------------------------------------------------------------------ */
+
+/// Single-row table holding first-run and platform-wide state.
+model PlatformSettings {
+  id                    Int      @id @default(1)
+  /// False until the setup wizard completes successfully.
+  setupComplete         Boolean  @default(false)
+  /// True while the seeded Admin/Password123 credential is still usable.
+  bootstrapCredentialActive Boolean @default(true)
+  /// Registration is refused entirely when the host fails the hard requirements.
+  registrationOpen      Boolean  @default(true)
+  registrationRequiresInvite Boolean @default(false)
+  /// Most recent host-requirements report.
+  requirementsReport    Json?
+  requirementsPass      Boolean  @default(false)
+  requirementsCheckedAt DateTime?
+  lastSpeedTestAt       DateTime?
+  /// Version of the encryption key currently in use, for key rotation.
+  encryptionKeyVersion  Int      @default(1)
+  /// Random, stable identifier used for anonymous usage reporting. Generated
+  /// on first boot and never derived from anything identifying.
+  telemetryInstanceId   String?
+  telemetryLastSentAt   DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("platform_settings")
+}

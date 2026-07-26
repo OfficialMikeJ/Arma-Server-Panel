@@ -1,0 +1,45 @@
+# LAN testing overlay.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.lan.yml up -d
+#
+# Differences from the production stack:
+#   * No Caddy/TLS. Caddy would try to obtain a public certificate for a name
+#     that does not resolve, and fail.
+#   * The web app and API publish ports directly on the NAS.
+#   * NODE_ENV=development, because the config layer refuses to run in
+#     production over plain http with insecure cookies - correctly so.
+#
+# This is for testing on a trusted network only. Do not expose these ports to
+# the internet: over plain http the session cookie is sent in the clear.
+
+services:
+  api:
+    environment:
+      NODE_ENV: development
+      REQUIRE_SECURE_COOKIES: "false"
+      TRUST_PROXY: "false"
+      # Must match exactly how you reach the web app in the browser, or the
+      # Origin check will reject every request.
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://192.168.1.100:8300}
+    # Host-side ports are configurable so they can dodge whatever else is
+    # already running on the box. Container-side ports never change.
+    ports:
+      - "${API_HOST_PORT:-8400}:4000"
+    networks:
+      - internal
+      - edge
+
+  web:
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      API_INTERNAL_URL: http://api:4000
+    ports:
+      - "${WEB_HOST_PORT:-8300}:3000"
+
+  # Not needed without TLS. `replicas: 0` keeps it defined but stopped.
+  proxy:
+    deploy:
+      replicas: 0
+    profiles:
+      - disabled

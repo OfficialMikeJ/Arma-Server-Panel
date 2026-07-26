@@ -1,0 +1,2 @@
+# Static assets served at the site root (favicon, robots.txt, og images).
+# Kept in version control so the Docker build's COPY step always has a source.
