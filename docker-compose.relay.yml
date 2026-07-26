@@ -1,0 +1,61 @@
+# Arma Server Panel - relay daemon
+#
+#   docker compose -f docker-compose.relay.yml up -d --build
+#
+# ---------------------------------------------------------------------------
+# THIS DOES NOT GO ON THE SAME MACHINE AS THE PANEL.
+#
+# The relay is the public address players connect to. Running it behind the
+# same NAT as the panel achieves nothing - it needs a public IP of its own.
+# A £4/month VPS is enough; it forwards UDP and holds no game data.
+# ---------------------------------------------------------------------------
+#
+# Required in .env:
+#   RELAY_PUBLIC_HOST   the address or domain players will connect to
+#   RELAY_TOKEN         shared secret, also set on every panel that uses it
+#
+# Then on the panel:
+#   RELAY_ENABLED=true
+#   RELAY_ENDPOINT=https://relay.example.com
+#   RELAY_TOKEN=<same value>
+
+name: arma-server-panel-relay
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: docker/relay/Dockerfile
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    environment:
+      RELAY_PUBLIC_HOST: ${RELAY_PUBLIC_HOST:?RELAY_PUBLIC_HOST is required}
+      RELAY_TOKEN: ${RELAY_TOKEN:?RELAY_TOKEN is required}
+      RELAY_CONTROL_PORT: 8080
+      RELAY_DATA_PORT: 9000
+      RELAY_PORT_RANGE_START: ${RELAY_PORT_RANGE_START:-30000}
+      RELAY_PORT_RANGE_END: ${RELAY_PORT_RANGE_END:-31000}
+    ports:
+      # Control plane. Put TLS in front of this - it speaks plain HTTP and the
+      # bearer token would otherwise cross the internet in the clear.
+      - "${RELAY_CONTROL_PORT:-8080}:8080"
+      # Tunnel endpoint the panel dials out to.
+      - "9000:9000/udp"
+      # Public game ports handed out to servers. Must match the range above.
+      - "${RELAY_PORT_RANGE_START:-30000}-${RELAY_PORT_RANGE_END:-31000}:30000-31000/udp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "32m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

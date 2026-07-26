@@ -137,9 +137,33 @@ export default function NetworkPage({ params }: { params: Promise<{ id: string }
           <span>
             <strong>Route through the relay</strong> — players see the relay address instead of
             yours, and it works behind carrier-grade NAT.
-            {!state.relayAvailable ? ' Not configured on this node.' : ''}
           </span>
         </label>
+
+        {!state.relayAvailable ? (
+          <div className="rounded-md border border-ink-400 bg-ink-200 p-3 text-xs leading-relaxed text-ink-800">
+            <p className="mb-2 font-semibold text-ink-950">No relay is configured yet.</p>
+            <p className="mb-2">
+              A relay has to run somewhere with a public IP address — it is the address players
+              connect to, so it cannot live on this machine behind the same router. Any small VPS
+              will do; it only forwards UDP and stores nothing.
+            </p>
+            <pre className="mb-2 overflow-x-auto rounded bg-ink-100 p-2 font-mono text-[11px]">
+{`# on the public host
+git clone https://github.com/OfficialMikeJ/Arma-Server-Panel.git
+cd Arma-Server-Panel
+RELAY_PUBLIC_HOST=relay.example.com \\
+RELAY_TOKEN=$(openssl rand -hex 32) \\
+  docker compose -f docker-compose.relay.yml up -d --build`}
+            </pre>
+            <p>
+              Then add <code className="font-mono text-brand-400">RELAY_ENABLED=true</code>,{' '}
+              <code className="font-mono text-brand-400">RELAY_ENDPOINT</code> and the same{' '}
+              <code className="font-mono text-brand-400">RELAY_TOKEN</code> to this panel&apos;s{' '}
+              <code className="font-mono text-brand-400">.env</code> and restart it.
+            </p>
+          </div>
+        ) : null}
 
         <p
           className={`rounded-md p-3 text-xs leading-relaxed ${
