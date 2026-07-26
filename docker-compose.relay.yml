@@ -1,6 +1,6 @@
 # Arma Server Panel - relay daemon
 #
-#   docker compose -f docker-compose.relay.yml up -d --build
+#   docker compose -f docker-compose.relay.yml up -d --build && docker compose -f docker-compose.relay.yml up -d
 #
 # ---------------------------------------------------------------------------
 # THIS DOES NOT GO ON THE SAME MACHINE AS THE PANEL.

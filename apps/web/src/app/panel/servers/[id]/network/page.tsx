@@ -154,7 +154,8 @@ git clone https://github.com/OfficialMikeJ/Arma-Server-Panel.git
 cd Arma-Server-Panel
 RELAY_PUBLIC_HOST=relay.example.com \\
 RELAY_TOKEN=$(openssl rand -hex 32) \\
-  docker compose -f docker-compose.relay.yml up -d --build`}
+  docker compose -f docker-compose.relay.yml up -d --build \\
+  && docker compose -f docker-compose.relay.yml up -d`}
             </pre>
             <p>
               Then add <code className="font-mono text-brand-400">RELAY_ENABLED=true</code>,{' '}

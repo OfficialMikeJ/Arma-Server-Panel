@@ -2,11 +2,11 @@
 #
 # Arma Server Panel - installer
 #
-#   curl -fsSL https://armaserverpanel.io/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/OfficialMikeJ/Arma-Server-Panel/main/install.sh | sudo sh
 #
 # Or, preferably, read it first and then run it:
 #
-#   curl -fsSL https://armaserverpanel.io/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/OfficialMikeJ/Arma-Server-Panel/main/install.sh -o install.sh
 #   less install.sh
 #   sudo sh install.sh
 #
@@ -30,7 +30,7 @@ set -eu
 # ------------------------------------------------------------------ #
 
 PANEL_NAME="Arma Server Panel"
-DOWNLOAD_BASE="${ASP_DOWNLOAD_BASE:-https://armaserverpanel.io}"
+DOWNLOAD_BASE="${ASP_DOWNLOAD_BASE:-https://armaserverpanel.io}"  # only used when ASP_REPO is cleared
 INSTALL_DIR="${ASP_INSTALL_DIR:-/opt/arma-server-panel}"
 CHANNEL="${ASP_CHANNEL:-stable}"
 
@@ -375,7 +375,7 @@ start_site() {
   step "Building and starting the website"
 
   cd "$INSTALL_DIR"
-  docker compose -f docker-compose.site.yml up -d --build ||
+  docker compose -f docker-compose.site.yml up -d --build && docker compose -f docker-compose.site.yml up -d ||
     die "The website failed to start.
      Logs:  cd $INSTALL_DIR && docker compose -f docker-compose.site.yml logs"
 
@@ -511,7 +511,7 @@ start_stack() {
   step "Building and starting (this takes a few minutes on first run)"
 
   cd "$INSTALL_DIR"
-  docker compose up -d --build || die "The stack failed to start.
+  docker compose up -d --build && docker compose up -d || die "The stack failed to start.
      Look at the logs with:  cd $INSTALL_DIR && docker compose logs"
 
   printf '  waiting for the API'

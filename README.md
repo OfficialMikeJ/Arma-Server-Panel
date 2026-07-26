@@ -26,43 +26,62 @@ home IP address private.
 
 ## Quick start
 
+One command. It checks your hardware, installs Docker if it is missing, generates your encryption
+keys, writes `.env`, and starts everything:
+
 ```bash
-# 1. Configure
-cp .env.example .env
-
-# Generate the two required keys (they must be different):
-node -e "console.log('ENCRYPTION_KEY=' + require('crypto').randomBytes(32).toString('hex'))"
-node -e "console.log('HASH_PEPPER='   + require('crypto').randomBytes(32).toString('hex'))"
-
-# 2. Install and prepare the database
-#    (create the database first: createdb arma_server_panel)
-npm install
-npm run db:migrate      # first run generates the initial migration
-npm run db:seed
-
-# On an existing deployment with migrations already committed, use:
-#   npm run db:deploy
-
-# 3. Build the game images (these download SteamCMD, so they take a few minutes)
-docker build -t asp/reforger:latest docker/reforger
-docker build -t asp/arma3:latest    docker/arma3
-
-# 4. Run
-npm run dev          # api on :4000, web on :3000
+curl -fsSL https://raw.githubusercontent.com/OfficialMikeJ/Arma-Server-Panel/main/install.sh | sudo sh
 ```
 
-Then open <http://localhost:3000/setup> and work through the wizard.
+It prints your URL and first-login credentials when it finishes.
 
-`docker compose up -d` brings up Postgres, the API and the web app. No reverse proxy is included —
-put your own in front (Nginx Proxy Manager, Traefik, whatever you already run), or reach it directly
-on the LAN.
+Prefer to read it first — it runs as root, so that is a reasonable thing to want:
 
-Ports are set in `.env`: `WEB_HOST_PORT` (default 3002) and `API_HOST_PORT` (default 3004).
+```bash
+curl -fsSL https://raw.githubusercontent.com/OfficialMikeJ/Arma-Server-Panel/main/install.sh -o install.sh
+less install.sh
+sudo sh install.sh
+```
 
-If you front it with a proxy, point it at `WEB_HOST_PORT` and **enable WebSocket support** on that
-proxy host, or the live server console will not connect. Set `TRUST_PROXY=true` and put the proxy's
-subnet in `TRUSTED_PROXY_CIDRS` so rate limits and audit entries record real client addresses rather
-than the proxy's.
+### Manual install
+
+```bash
+git clone https://github.com/OfficialMikeJ/Arma-Server-Panel.git
+cd Arma-Server-Panel
+cp .env.example .env
+
+# Fill in the required values:
+echo "ENCRYPTION_KEY=$(openssl rand -hex 32)" >> .env
+echo "HASH_PEPPER=$(openssl rand -hex 32)"    >> .env
+echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
+echo "DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)" >> .env
+# Then set PUBLIC_APP_URL, NEXT_PUBLIC_API_URL and NEXT_PUBLIC_APP_URL to your address.
+
+docker compose up -d --build && docker compose up -d
+```
+
+Database migrations and the administrator account are created automatically on first start. Game
+server images build themselves the first time you create a server of that game — nothing to build by
+hand.
+
+### After an update
+
+```bash
+git pull
+docker compose up -d --build && docker compose up -d
+```
+
+### Behind a reverse proxy
+
+No proxy is included. Put your own in front (Nginx Proxy Manager, Traefik, Caddy) or reach it
+directly on the LAN. Ports come from `.env`: `WEB_HOST_PORT` (default 3002) and `API_HOST_PORT`
+(default 3004).
+
+Point the proxy at `WEB_HOST_PORT` and **enable WebSocket support** on that proxy host, or the live
+server console will not connect. Set `TRUST_PROXY=true` and put the proxy's subnet in
+`TRUSTED_PROXY_CIDRS` so rate limits and audit entries record real client addresses rather than the
+proxy's — without an explicit list, forwarded headers are ignored entirely, because otherwise any
+client could forge its own address.
 
 ---
 

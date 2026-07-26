@@ -1,6 +1,6 @@
 # Arma Server Panel
 #
-#   docker compose up -d --build
+#   docker compose up -d --build && docker compose up -d
 #
 # No reverse proxy is included. The web app and API publish plain HTTP ports on
 # the host, for an existing proxy (Nginx Proxy Manager, Traefik, etc.) to sit in
