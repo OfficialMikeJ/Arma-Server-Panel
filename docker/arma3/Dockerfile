@@ -3,7 +3,7 @@
 # Build:  docker build -t asp/arma3:latest docker/arma3
 #
 # Hardening notes:
-#   * Runs as uid/gid 10000, never root. The panel additionally applies
+#   * Runs as uid/gid 1000 (matching the API container), never root. The panel additionally applies
 #     no-new-privileges, cap_drop ALL and a read-only rootfs at run time.
 #   * SteamCMD credentials are passed at run time, never baked into a layer.
 #   * No package manager, compiler or shell utility beyond what the entrypoint
