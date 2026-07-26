@@ -113,6 +113,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3000
+      # Next's standalone server binds to $HOSTNAME, which Docker sets to the
+      # container id. That makes it listen on a single interface, and forwarded
+      # connections get reset. Force it to listen on all interfaces.
+      HOSTNAME: 0.0.0.0
       API_INTERNAL_URL: http://api:4000
     read_only: true
     tmpfs:

@@ -44,6 +44,11 @@ ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     PORT=3000
 
+# Next's standalone server uses HOSTNAME as its bind address. Docker otherwise
+# sets it to the container id, so the server listens on a single interface and
+# forwarded connections are reset by peer.
+ENV HOSTNAME=0.0.0.0
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates \
  && rm -rf /var/lib/apt/lists/*
