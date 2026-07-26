@@ -16,6 +16,7 @@ import { isIP } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { loadConfig } from '../../config/env.js';
 import { isPrivateAddress } from '../../security/client-identity.js';
+import { createPinnedLookup } from '../../security/pinned-lookup.js';
 import { SsrfBlockedError } from '../../security/ssrf.js';
 import { logger } from '../../lib/logger.js';
 
@@ -59,7 +60,7 @@ async function pinnedDispatcher(url: URL): Promise<Agent> {
   return new Agent({
     connect: {
       servername: host,
-      lookup: (_h, _o, cb) => cb(null, address, family === 6 ? 6 : 4),
+      lookup: createPinnedLookup({ address, family }) as never,
     },
     headersTimeout: TIMEOUT_MS,
     bodyTimeout: TIMEOUT_MS,

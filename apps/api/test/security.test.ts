@@ -26,6 +26,7 @@ const { generateTotpSecret, verifyTotp, currentStep } = await import('../src/sec
 const { encryptSecret, decryptSecretToString, base32Decode, safeEqual } = await import(
   '../src/security/crypto.js'
 );
+const { createPinnedLookup } = await import('../src/security/pinned-lookup.js');
 const { resolveWithin } = await import('../src/modules/files/file-service.js');
 const { redact, parseAssistantResponse } = await import('../src/modules/ai/ai-assistant.js');
 
@@ -141,6 +142,48 @@ describe('Constant-time comparison', () => {
     assert.equal(safeEqual('abc', 'abd'), false);
     assert.equal(safeEqual('abc', 'abcdef'), false);
     assert.equal(safeEqual('', ''), true);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+
+describe('Pinned DNS lookup', () => {
+  it('returns an array when the caller asks for all addresses', () => {
+    // undici calls the custom lookup with { all: true } and reads
+    // addresses[0].address. Returning a bare string here is what produced
+    // "Invalid IP address: undefined" and broke every outbound request.
+    const lookup = createPinnedLookup({ address: '203.0.113.10', family: 4 });
+
+    let received: unknown;
+    lookup('example.com', { all: true }, (_error, value) => {
+      received = value;
+    });
+
+    assert.ok(Array.isArray(received), 'must hand back an array when all:true');
+    assert.deepEqual(received, [{ address: '203.0.113.10', family: 4 }]);
+  });
+
+  it('returns the legacy (address, family) form otherwise', () => {
+    const lookup = createPinnedLookup({ address: '203.0.113.10', family: 4 });
+
+    let address: unknown;
+    let family: unknown;
+    lookup('example.com', {}, (_error, value, fam) => {
+      address = value;
+      family = fam;
+    });
+
+    assert.equal(address, '203.0.113.10');
+    assert.equal(family, 4);
+  });
+
+  it('normalises the address family to 4 or 6', () => {
+    const lookup = createPinnedLookup({ address: '::1', family: 6 });
+    let received: Array<{ family: number }> = [];
+    lookup('example.com', { all: true }, (_error, value) => {
+      received = value as Array<{ family: number }>;
+    });
+    assert.equal(received[0]?.family, 6);
   });
 });
 

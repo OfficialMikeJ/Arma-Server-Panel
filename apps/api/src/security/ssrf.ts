@@ -18,6 +18,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { LookupAddress } from 'node:dns';
 import { isIP } from 'node:net';
 import { isPrivateAddress } from './client-identity.js';
+import { createPinnedLookup } from './pinned-lookup.js';
 import { logger } from '../lib/logger.js';
 
 export class SsrfBlockedError extends Error {
@@ -114,9 +115,9 @@ function pinnedAgent(hostname: string, address: string, family: number): Dispatc
   return new Agent({
     connect: {
       servername: hostname,
-      lookup: (_host, _opts, callback) => {
-        callback(null, address, family === 6 ? 6 : 4);
-      },
+      // undici calls this with `all: true` and expects an array back; see
+      // createPinnedLookup for why both conventions have to be handled.
+      lookup: createPinnedLookup({ address, family }) as never,
     },
     headersTimeout: DEFAULTS.timeoutMs,
     bodyTimeout: DEFAULTS.timeoutMs,
