@@ -2,7 +2,20 @@
  * Port exposure strategy.
  *
  * Goal from the spec: a server must be reachable from the public internet, and
- * a self-hoster's home IP must not be exposed.
+ * a home connection's IP must not be exposed.
+ *
+ * Four deployments are supported, and they are genuinely different problems:
+ *
+ *   direct  -> the machine holds a public address (VPS, dedicated, colo, or a
+ *              home lab on a routed prefix). Nothing to forward; the only thing
+ *              that can block a player is the host firewall or a provider
+ *              security group. This is checked first, because running NAT
+ *              discovery here wastes seconds and then reports a "failure" that
+ *              is nothing of the sort.
+ *   router  -> behind a NAT router the operator controls. NAT-PMP, PCP or UPnP.
+ *   cgnat   -> behind the ISP's NAT. Nothing LAN-side can help; relay only.
+ *   relay   -> chosen deliberately, at any of the above, to keep the host's own
+ *              address off players' screens.
  *
  * Those two goals conflict under direct port forwarding - if players connect
  * straight to the router, they can see its address. The panel therefore treats
@@ -226,6 +239,24 @@ async function forwardSinglePort(
       };
     }
     logger.warn({ portKey, reason: relay.message }, 'Relay unavailable, falling back to direct mapping');
+  }
+
+  /* ---- Already on a public address: nothing to traverse ---- */
+  if (environment.directPublic) {
+    return {
+      ...base,
+      method: PortMethod.DIRECT,
+      success: true,
+      publicHost: environment.externalAddress,
+      leaseSeconds: null,
+      message:
+        'This machine holds a public address, so the port is reachable with no forwarding. ' +
+        'If players cannot connect, the host firewall or the provider’s security group is what to open.',
+      // Players see this machine's address because it is the address. That is
+      // the intent of a data-centre or home-lab deployment, not a leak - but it
+      // is still recorded honestly so the UI can say so.
+      exposesHostIp: true,
+    };
   }
 
   /* ---- Misconfiguration: say what to set, not "no gateway found" ---- */

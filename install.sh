@@ -456,11 +456,28 @@ configure() {
 
   # The API runs in a container and cannot discover these itself - a bridged
   # container only ever sees Docker's own network.
-  _router=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
-  if [ -n "${_router:-}" ]; then
-    ok "Router: ${_router}"
+  #
+  # A machine on a public address has nothing to forward, so it is not asked for
+  # a router it does not have. That covers a VPS, a dedicated or colocated box,
+  # and a home lab on a routed prefix.
+  case "${_ip}" in
+    10.*|192.168.*|127.*|169.254.*|100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*|    172.1[6-9].*|172.2[0-9].*|172.3[01].*)
+      _direct_public=0 ;;
+    *)
+      _direct_public=1 ;;
+  esac
+
+  if [ "${_direct_public}" = "1" ]; then
+    ok "This machine holds a public address (${_ip}). No port forwarding is needed."
+    ok "Open ${_ip} UDP 2001-12301 on the host firewall and any provider security group."
+    _router=""
   else
-    warn "Could not detect the router address; automatic port forwarding will be off."
+    _router=$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')
+    if [ -n "${_router:-}" ]; then
+      ok "Router: ${_router}"
+    else
+      warn "Could not detect the router address; automatic port forwarding will be off."
+    fi
   fi
 
   cat > "$INSTALL_DIR/.env" <<EOF

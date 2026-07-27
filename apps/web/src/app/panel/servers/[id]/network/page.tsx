@@ -10,6 +10,7 @@ interface NetworkState {
   autoPortForward: boolean;
   relayAvailable: boolean;
   behindCgnat: boolean;
+  directPublic: boolean;
   availableMethods: { natpmp: boolean; pcp: boolean; upnp: boolean; relay: boolean };
   ports: Array<{
     key: string;
@@ -111,7 +112,13 @@ export default function NetworkPage({ params }: { params: Promise<{ id: string }
         <code className="font-mono text-xs text-ink-800">{state.address}</code>
       </div>
 
-      {state.behindCgnat ? (
+      {state.directPublic ? (
+        <div className="rounded-md border border-power-start/40 bg-power-start/10 p-3 text-sm leading-relaxed text-power-start">
+          This machine holds a public address, so there is no port forwarding to do — players reach
+          it directly. If someone cannot connect, the host firewall or your provider&apos;s security
+          group is what needs opening, not a router.
+        </div>
+      ) : state.behindCgnat ? (
         <div className="rounded-md border border-power-stop/40 bg-power-stop/10 p-3 text-sm leading-relaxed text-power-stop">
           Your ISP places this connection behind carrier-grade NAT. No router setting can open an
           inbound port through it — relay mode is the only way to make this server reachable.

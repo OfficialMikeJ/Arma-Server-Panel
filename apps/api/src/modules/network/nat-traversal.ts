@@ -7,15 +7,21 @@
  *   2. PCP      (RFC 6887) - NAT-PMP's successor, on most modern firmware.
  *   3. UPnP IGD (SSDP discovery + SOAP) - widest support, most often disabled.
  *
+ * None of this applies to a host that already holds a public address - a VPS, a
+ * dedicated or colocated machine, or a home lab on a routed prefix. There is no
+ * NAT to traverse there, so `probeNatEnvironment` detects that case first and
+ * returns immediately rather than spending seconds on SSDP discovery and then
+ * telling the operator to configure a router they do not have.
+ *
  * Honest limitation, and why the relay exists:
  *   No port-mapping protocol can work when the ISP places the customer behind
  *   carrier-grade NAT, or when the router has UPnP/NAT-PMP disabled and the
  *   customer will not enable it. In those cases nothing running on the LAN can
  *   open an inbound port - that is a property of the network, not of this code.
  *   `port-forwarder.ts` therefore falls through to a relay tunnel, which
- *   reaches 100% of hosts *and* is the only option that keeps a home IP
- *   private, since with a direct mapping players see the operator's real
- *   address by definition.
+ *   reaches 100% of hosts *and* is the only option that keeps a residential IP
+ *   private, since with a direct mapping players see the real address by
+ *   definition.
  */
 
 import { createSocket } from 'node:dgram';
@@ -668,10 +674,41 @@ export interface NatEnvironment {
   upnpDevice: IgdDevice | null;
   /** True when the WAN address is itself private - i.e. carrier-grade NAT. */
   behindCgnat: boolean;
+  /**
+   * True when this machine holds a public address itself, with no NAT in front
+   * of it - a VPS, a dedicated server, a colocated box, or a home lab on a
+   * routed prefix.
+   *
+   * There is nothing to traverse in that case. Asking for a router, probing for
+   * NAT-PMP and then reporting "automatic port opening did not succeed" is not
+   * a failure to report: the port is already open, subject only to the host's
+   * own firewall.
+   */
+  directPublic: boolean;
   /** Running in a container that cannot see the LAN by itself. */
   containerised: boolean;
   /** Set when configuration is missing and nothing can possibly work. */
   configurationProblem: string | null;
+}
+
+/**
+ * Whether this host sits directly on a public address.
+ *
+ * Checks the address the operator told us about first, then the machine's own
+ * interfaces - a bare-metal install in a data centre has the public address on
+ * eth0 and no LAN_ADDRESS set at all.
+ */
+export function hasDirectPublicAddress(): boolean {
+  const config = loadConfig();
+  if (config.LAN_ADDRESS) return !isPrivateAddress(config.LAN_ADDRESS);
+
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family !== 'IPv4' || address.internal) continue;
+      if (!isPrivateAddress(address.address)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -683,6 +720,26 @@ export async function probeNatEnvironment(): Promise<NatEnvironment> {
   const containerised = isContainerNetwork();
   const localAddress = getLocalAddress();
   const gateways = guessGateways();
+  const directPublic = hasDirectPublicAddress();
+
+  // A host on a public address has no NAT to traverse. Skip the whole probe -
+  // it would spend seconds on SSDP discovery, find nothing, and then tell a
+  // data-centre operator to configure a router they do not have.
+  if (directPublic) {
+    return {
+      localAddress,
+      gateway: null,
+      externalAddress: config.LAN_ADDRESS ?? localAddress,
+      natpmpAvailable: false,
+      pcpAvailable: false,
+      upnpAvailable: false,
+      upnpDevice: null,
+      behindCgnat: false,
+      directPublic: true,
+      containerised,
+      configurationProblem: null,
+    };
+  }
 
   // Bail early with something actionable rather than probing Docker's bridge
   // and reporting "no gateway found", which sounds like a router fault.
@@ -701,6 +758,7 @@ export async function probeNatEnvironment(): Promise<NatEnvironment> {
       upnpAvailable: false,
       upnpDevice: null,
       behindCgnat: false,
+      directPublic: false,
       containerised: true,
       configurationProblem:
         `The panel runs in a container and cannot see your LAN by itself. ` +
@@ -765,6 +823,7 @@ export async function probeNatEnvironment(): Promise<NatEnvironment> {
     // A private WAN address means the ISP is doing the NAT, and no
     // LAN-side protocol can open a port through it.
     behindCgnat: externalAddress !== null && isPrivateAddress(externalAddress),
+    directPublic: false,
     containerised,
     configurationProblem:
       localAddress === null

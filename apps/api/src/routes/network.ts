@@ -35,6 +35,7 @@ export async function registerNetworkRoutes(app: FastifyInstance): Promise<void>
       autoPortForward: server.autoPortForward,
       relayAvailable: isRelayConfigured(),
       behindCgnat: environment.behindCgnat,
+      directPublic: environment.directPublic,
       availableMethods: {
         natpmp: environment.natpmpAvailable,
         pcp: environment.pcpAvailable,
@@ -53,10 +54,14 @@ export async function registerNetworkRoutes(app: FastifyInstance): Promise<void>
         lastVerifiedAt: port.lastVerifiedAt?.toISOString() ?? null,
         message: port.message,
       })),
-      // Surfaced so the UI can be honest about the privacy trade-off.
+      // Surfaced so the UI can be honest about the privacy trade-off - without
+      // treating a hosted machine's address as something that leaked. On a VPS
+      // or a colocated box the public address is the point.
       privacyNote: server.useRelay
-        ? 'Traffic is routed through the relay. Players see the relay address, not yours.'
-        : 'Players connect directly, which means they can see this connection’s public IP address. Enable relay mode to keep it private.',
+        ? 'Traffic is routed through the relay. Players see the relay address, not this machine’s.'
+        : environment.directPublic
+          ? 'Players connect straight to this machine’s public address, which is what a hosted deployment is for. Relay mode is available if you would rather it stayed hidden.'
+          : 'Players connect directly, which means they can see this connection’s public IP address. Enable relay mode to keep it private.',
     });
   });
 

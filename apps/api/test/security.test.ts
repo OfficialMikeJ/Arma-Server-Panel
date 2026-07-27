@@ -38,6 +38,8 @@ const { reforgerAdapter } = await import('../src/modules/games/adapters/reforger
 const { CONFIG_FIELDS, getConfigValue, setConfigValue, unmappedConfigKeys } = await import(
   '@asp/shared'
 );
+const { hasDirectPublicAddress } = await import('../src/modules/network/nat-traversal.js');
+const { resetConfigForTests } = await import('../src/config/env.js');
 
 /* ------------------------------------------------------------------ */
 
@@ -154,6 +156,42 @@ describe('Config field descriptors', () => {
   it('has no descriptors for an unreleased title', () => {
     assert.equal(CONFIG_FIELDS.arma4.length, 0);
   });
+});
+
+describe('Deployment detection', () => {
+  // The panel is not only for home connections: a VPS, a dedicated box, a
+  // colocated machine or a home lab on a routed prefix all hold a public
+  // address themselves. Getting this wrong sends a data-centre operator off to
+  // configure a router that does not exist.
+  const cases: Array<[string, string, boolean]> = [
+    ['a VPS', '5.161.42.17', true],
+    ['a dedicated server', '65.108.200.3', true],
+    ['a home LAN', '192.168.2.28', false],
+    ['a 10.x home lab', '10.0.1.50', false],
+    ['a 172.16 range', '172.20.5.9', false],
+    ['CGNAT space', '100.64.3.1', false],
+    ['link-local', '169.254.1.5', false],
+    ['loopback', '127.0.0.1', false],
+    // Documentation ranges are not routable either. Treating one as a public
+    // host would skip NAT traversal on a machine that genuinely needs it, so
+    // the conservative answer is the correct one.
+    ['a documentation range', '203.0.113.10', false],
+  ];
+
+  for (const [label, address, expectPublic] of cases) {
+    it(`${label} (${address}) is ${expectPublic ? '' : 'not '}a direct public host`, () => {
+      const previous = process.env.LAN_ADDRESS;
+      process.env.LAN_ADDRESS = address;
+      resetConfigForTests();
+      try {
+        assert.equal(hasDirectPublicAddress(), expectPublic);
+      } finally {
+        if (previous === undefined) delete process.env.LAN_ADDRESS;
+        else process.env.LAN_ADDRESS = previous;
+        resetConfigForTests();
+      }
+    });
+  }
 });
 
 describe('Config path helpers', () => {

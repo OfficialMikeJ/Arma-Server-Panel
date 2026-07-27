@@ -5,8 +5,8 @@ launch day — the adapter is already written).
 
 Each game server runs in its own hardened Docker container with granular CPU, memory, storage and
 bandwidth limits, a live console, a mod manager with presets and load ordering, an HTTP API, Discord
-and Pushover integrations, automatic port opening, and an optional relay that keeps a self-hoster's
-home IP address private.
+and Pushover integrations, automatic port opening, and an optional relay that keeps a residential
+IP address private. Runs the same way on a VPS, a dedicated box, or a home lab.
 
 ---
 
@@ -166,18 +166,33 @@ wired up this way — when it ships, set its Steam app id and flip `released` to
 
 ## Networking: how servers become reachable
 
-A server must be reachable from the public internet, and a self-hoster's home IP should not be
-exposed. **These two goals conflict under direct port forwarding** — if players connect straight to
-the router, they can see its address. The panel is explicit about that trade-off rather than
-pretending it does not exist.
+The panel runs in three quite different places, and treats them as three different problems
+rather than assuming everyone is at home behind a consumer router.
 
-| Method | Reachable | Hides your IP | Works behind CGNAT |
-| --- | --- | --- | --- |
-| **Relay** | yes | **yes** | **yes** |
-| NAT-PMP | yes | no | no |
-| PCP | yes | no | no |
-| UPnP IGD | yes | no | no |
-| Manual forward | yes | no | no |
+**On a public address** — a VPS, a dedicated or colocated machine, or a home lab on a routed
+prefix — there is nothing to forward. The panel detects this at setup, skips NAT discovery
+entirely, and tells you the one thing that can still block a player: the host firewall, or your
+provider's security group. It will not ask you to configure a router you do not have.
+
+**Behind a router you control** — the common home lab case — the panel opens ports itself over
+NAT-PMP, PCP or UPnP, renews the leases, and falls back to printing the exact manual forward if
+the router refuses.
+
+**Behind carrier-grade NAT**, or when you would rather players never saw your address, the relay
+carries traffic over an outbound-initiated tunnel. Nothing LAN-side can open an inbound port
+through CGNAT; that is a property of the network, not something the panel can work around.
+
+| Method | Reachable | Hides your IP | Works behind CGNAT | Typical deployment |
+| --- | --- | --- | --- | --- |
+| **Direct** | yes | no | n/a | VPS, dedicated, colo, routed home lab |
+| **Relay** | yes | **yes** | **yes** | anywhere privacy matters |
+| NAT-PMP | yes | no | no | home lab behind a router |
+| PCP | yes | no | no | home lab behind a router |
+| UPnP IGD | yes | no | no | home lab behind a router |
+| Manual forward | yes | no | no | router with UPnP disabled |
+
+On a hosted machine, players seeing its address is the point rather than a leak, and the panel
+says so instead of warning about it.
 
 `preferred: "auto"` picks the relay when one is configured, then falls back through NAT-PMP, PCP and
 UPnP. Leases are renewed every 5 minutes by the scheduler, so a server does not silently drop off

@@ -151,19 +151,28 @@ export async function registerSetupRoutes(app: FastifyInstance): Promise<void> {
         // The external address is the operator's own; only shown to them.
         externalAddress: environment.externalAddress,
         behindCgnat: environment.behindCgnat,
+        directPublic: environment.directPublic,
         methods: {
           natpmp: environment.natpmpAvailable,
           pcp: environment.pcpAvailable,
           upnp: environment.upnpAvailable,
           relay: isRelayConfigured(),
         },
-        recommendation: environment.behindCgnat
-          ? 'Your ISP uses carrier-grade NAT. No router setting can open an inbound port - use relay mode.'
-          : isRelayConfigured()
-            ? 'Relay mode is available. It keeps your home IP private and is the recommended option.'
+        // Ordered by how much the operator can actually do about it. A machine
+        // on a public address is the simplest case and is checked first, so a
+        // data-centre or home-lab install is never told to configure a router.
+        recommendation: environment.directPublic
+          ? 'This machine holds a public address, so servers are reachable with no port forwarding at all. ' +
+            'Open the panel’s port range on the host firewall and any provider security group, and you are done.'
+          : environment.behindCgnat
+            ? 'Your ISP uses carrier-grade NAT. No router setting can open an inbound port - use relay mode.'
             : environment.natpmpAvailable || environment.pcpAvailable || environment.upnpAvailable
-              ? 'Automatic port forwarding is available. Note that players will see your public IP address.'
-              : 'No automatic port forwarding was detected. Enable UPnP or NAT-PMP on your router, or configure relay mode.',
+              ? 'Automatic port forwarding is available. Players will see this connection’s public IP address; ' +
+                'use relay mode instead if that matters to you.'
+              : isRelayConfigured()
+                ? 'No automatic port forwarding was detected, but relay mode is configured and will work.'
+                : 'No automatic port forwarding was detected. Enable UPnP or NAT-PMP on your router, ' +
+                  'forward the port range by hand, or configure relay mode.',
       });
     },
   );
