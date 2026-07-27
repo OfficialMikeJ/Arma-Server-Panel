@@ -26,7 +26,12 @@ export async function allocatePorts(params: {
   serverId: string;
 }): Promise<AllocationResult> {
   const game = getGame(params.gameId);
-  const blockSize = Math.max(...game.ports.map((p) => p.offset)) + 1;
+
+  // What the game actually binds, versus the window reserved for it. Arma 3
+  // touches five consecutive ports but wants far more elbow room around them -
+  // see PORT_ALLOCATION.blockStride.
+  const portSpan = Math.max(...game.ports.map((p) => p.offset)) + 1;
+  const blockSize = Math.max(PORT_ALLOCATION.blockStride, portSpan);
 
   return prisma.$transaction(async (tx) => {
     // Serialise allocation across concurrent requests.

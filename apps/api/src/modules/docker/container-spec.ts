@@ -25,7 +25,19 @@ export interface ContainerSpecInput {
   /** Base port allocated on the host. */
   basePort: number;
   /** Ports to publish, keyed by the game definition's port key. */
-  publishPorts: Array<{ key: string; hostPort: number; containerPort: number; protocol: 'udp' | 'tcp' }>;
+  publishPorts: Array<{
+    key: string;
+    hostPort: number;
+    containerPort: number;
+    protocol: 'udp' | 'tcp';
+    /** From the game definition. Non-public ports are administrative. */
+    public: boolean;
+  }>;
+  /**
+   * Host address the non-public ports bind to. See modules/network/game-host -
+   * it is the one address that both the panel can reach and the LAN cannot.
+   */
+  controlBindAddress: string;
   resources: {
     cpuCores: number;
     cpuSet: string | null;
@@ -103,9 +115,11 @@ export function buildContainerSpec(input: ContainerSpecInput): Docker.ContainerC
     exposedPorts[key] = {};
     portBindings[key] = [
       {
-        // Bind on all interfaces so players can reach it. The panel's own
-        // ports stay bound to loopback - see API_HOST.
-        HostIp: '0.0.0.0',
+        // Ports players connect to are bound on all interfaces. RCON and
+        // BattlEye are not: they are bound to the address only the panel and
+        // the host can reach, so an administrative port is never sitting on
+        // the LAN - or on the internet, for a host with a public address.
+        HostIp: port.public ? '0.0.0.0' : input.controlBindAddress,
         HostPort: String(port.hostPort),
       },
     ];

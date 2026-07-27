@@ -130,6 +130,13 @@ const envSchema = z
     /** Explicit IGD control URL, for when SSDP discovery cannot be used. */
     UPNP_CONTROL_URL: z.string().url().max(512).optional(),
 
+    /**
+     * Where the panel reaches its own game servers' published ports, for A2S
+     * player counts and RCON. Detected from the container's default gateway;
+     * set this only if that detection is wrong.
+     */
+    GAME_HOST_ADDRESS: z.string().min(7).max(45).optional(),
+
     /** Relay egress used to keep self-hosters' home IPs private. */
     RELAY_ENABLED: boolish.default(false),
     RELAY_ENDPOINT: z.string().optional(),

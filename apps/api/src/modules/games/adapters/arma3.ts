@@ -16,6 +16,7 @@ import type { GameAdapter, ParsedLogEvent, QueryResult, ServerSecrets } from '..
 import { loadConfig } from '../../../config/env.js';
 import { decryptSecretToString } from '../../../security/crypto.js';
 import { queryA2SInfo } from '../protocols/a2s.js';
+import { getGameHost } from '../../network/game-host.js';
 import { runRconCommand } from '../protocols/battleye-rcon.js';
 import { CONTAINER_DATA_PATH } from '../../docker/container-spec.js';
 import { badRequest } from '../../../lib/errors.js';
@@ -136,6 +137,13 @@ export const arma3Adapter: GameAdapter = {
       `passwordAdmin = ${cfgString(secrets.adminPassword)};`,
       `serverCommandPassword = ${cfgString(secrets.rconPassword)};`,
       `maxPlayers = ${config.maxPlayers};`,
+      // Pin the Steam ports rather than relying on Arma deriving them from
+      // -port. Left unset they fall back to the stock 2303/2304, which means
+      // the first server on the host wins them and every other one silently
+      // fails to register with Steam and to answer A2S queries - so the panel
+      // reports the server as offline with zero players even while it runs.
+      `steamQueryPort = ${server.basePort + 1};`,
+      `steamPort = ${server.basePort + 2};`,
       `motd[] = ${cfgArray(config.motd)};`,
       `motdInterval = ${config.motdInterval};`,
       `verifySignatures = ${config.verifySignatures};`,
@@ -219,7 +227,7 @@ export const arma3Adapter: GameAdapter = {
 
   async query(server): Promise<QueryResult> {
     // Steam query port is game port + 1.
-    const info = await queryA2SInfo('127.0.0.1', server.basePort + 1);
+    const info = await queryA2SInfo(await getGameHost(), server.basePort + 1);
     if (!info) {
       return {
         online: false,
@@ -267,7 +275,7 @@ export const arma3Adapter: GameAdapter = {
     const secrets = readSecrets(server);
     return runRconCommand(
       {
-        host: '127.0.0.1',
+        host: await getGameHost(),
         port: server.basePort + 4,
         password: secrets.battleyeRconPassword,
       },

@@ -81,6 +81,9 @@ services:
       LAN_ADDRESS: ${LAN_ADDRESS:-}
       ROUTER_ADDRESS: ${ROUTER_ADDRESS:-}
       UPNP_CONTROL_URL: ${UPNP_CONTROL_URL:-}
+      # Detected from the container's default gateway. Only set this if player
+      # counts stay at zero and console commands time out on a healthy server.
+      GAME_HOST_ADDRESS: ${GAME_HOST_ADDRESS:-}
       RELAY_ENABLED: ${RELAY_ENABLED:-false}
       RELAY_ENDPOINT: ${RELAY_ENDPOINT:-}
       RELAY_TOKEN: ${RELAY_TOKEN:-}

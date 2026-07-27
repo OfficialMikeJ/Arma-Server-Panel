@@ -38,6 +38,7 @@ import {
 } from '../docker/container-manager.js';
 import { emitPanelNotice, dropConsole } from './console-buffer.js';
 import { allocatePorts, releasePorts } from '../network/port-allocator.js';
+import { getGameHost } from '../network/game-host.js';
 import { getAdapter } from '../games/registry.js';
 import { assertHostRequirementsMet } from '../host/host-requirements.js';
 
@@ -331,6 +332,36 @@ function generateServerId(): string {
 /* Provisioning                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Starts a container, rebuilding it if its port bindings no longer fit the host.
+ *
+ * Administrative ports are bound to the address the panel reaches the host on,
+ * which is a Docker bridge gateway. Recreating the panel's own compose networks
+ * can renumber that bridge, and the container then refuses to start because the
+ * address it was built against no longer exists. Re-provisioning picks up the
+ * current one, which is invisibly correct rather than a dead server and a
+ * cryptic message.
+ */
+async function startWithRebuildOnBindFailure(server: Server): Promise<void> {
+  try {
+    await startContainer(server.containerName);
+    return;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const bindFailure =
+      /cannot assign requested address|address not available|bind: address/i.test(message);
+    if (!bindFailure) throw error;
+
+    logger.warn(
+      { err: error, serverId: server.id },
+      'Container port bindings are stale; rebuilding against the current host address',
+    );
+    emitPanelNotice(server.id, 'Host network changed - rebuilding the container.');
+  }
+
+  await provisionServer(server.id);
+}
+
 export async function provisionServer(serverId: string): Promise<void> {
   const server = await loadServer(serverId);
   const gameId = toGameId(server.game);
@@ -345,8 +376,12 @@ export async function provisionServer(serverId: string): Promise<void> {
     await ensureGameImage(gameId, (line) => emitPanelNotice(serverId, line));
 
     const allocations = await prisma.portAllocation.findMany({ where: { serverId } });
+    const publicKeys = new Set(
+      GAMES[gameId].ports.filter((spec) => spec.public).map((spec) => spec.key),
+    );
 
     await createContainer({
+      controlBindAddress: await getGameHost(),
       containerName: server.containerName,
       gameId,
       image: GAMES[gameId].image,
@@ -357,6 +392,7 @@ export async function provisionServer(serverId: string): Promise<void> {
         hostPort: a.externalPort,
         containerPort: a.internalPort,
         protocol: a.protocol as 'udp' | 'tcp',
+        public: publicKeys.has(a.portKey),
       })),
       resources: {
         cpuCores: server.cpuCores,
@@ -434,7 +470,7 @@ export async function performPowerAction(
       emitPanelNotice(serverId, `Start requested by ${actor.username}.`);
       // Rewrite config on every start so panel changes always take effect.
       await adapter.writeConfig(server);
-      await startContainer(server.containerName);
+      await startWithRebuildOnBindFailure(server);
       await prisma.server.update({
         where: { id: serverId },
         data: { lastStartedAt: new Date(), crashCount: 0 },

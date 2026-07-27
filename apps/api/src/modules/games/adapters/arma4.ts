@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { GAMES } from '@asp/shared';
 import type { GameAdapter, ParsedLogEvent, QueryResult } from '../adapter.js';
 import { queryA2SInfo } from '../protocols/a2s.js';
+import { getGameHost } from '../../network/game-host.js';
 import { runRconCommand } from '../protocols/battleye-rcon.js';
 import { CONTAINER_DATA_PATH } from '../../docker/container-spec.js';
 import { badRequest, preconditionFailed } from '../../../lib/errors.js';
@@ -124,7 +125,7 @@ export const arma4Adapter: GameAdapter = {
   },
 
   async query(server): Promise<QueryResult> {
-    const info = await queryA2SInfo('127.0.0.1', server.basePort + 1);
+    const info = await queryA2SInfo(await getGameHost(), server.basePort + 1);
     if (!info) {
       return {
         online: false,
@@ -160,7 +161,7 @@ export const arma4Adapter: GameAdapter = {
     assertReleased();
     const secrets = readSecrets(server);
     return runRconCommand(
-      { host: '127.0.0.1', port: server.basePort + 2, password: secrets.rconPassword },
+      { host: await getGameHost(), port: server.basePort + 2, password: secrets.rconPassword },
       command,
     );
   },
