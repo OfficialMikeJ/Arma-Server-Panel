@@ -250,13 +250,12 @@ export default function LoginPage() {
                     className="input text-center font-mono text-lg tracking-[0.2em]"
                     value={code}
                     onChange={(event) => setCode(event.target.value)}
-                    inputMode="text"
+                    inputMode="numeric"
                     autoComplete="one-time-code"
-                    autoCapitalize="characters"
                     spellCheck={false}
                     autoFocus
                     maxLength={19}
-                    placeholder="XXXX-XXXX-XXXX-XXXX"
+                    placeholder="0000-0000-0000-0000"
                     required
                   />
                 ) : (

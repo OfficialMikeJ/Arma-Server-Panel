@@ -279,8 +279,8 @@ export default function RegisterPage() {
           <div>
             <h1 className="text-lg font-bold">Set up your authenticator</h1>
             <p className="mt-1 text-sm text-ink-800">
-              Scan this with any authenticator app — we recommend Google Authenticator. This
-              replaces a password entirely.
+              Scan this with any authenticator app — Aegis, Ente Auth, 1Password, Bitwarden, Authy,
+              Google Authenticator, Microsoft Authenticator. This replaces a password entirely.
             </p>
           </div>
 

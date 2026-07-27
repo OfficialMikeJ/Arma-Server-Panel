@@ -182,7 +182,8 @@ export default function SetupTwoFactorPage() {
           Set up two-factor authentication
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-ink-800">
-          Scan the code with any authenticator app — Google Authenticator, Aegis, 1Password, Bitwarden.
+          Scan the code with any authenticator app. Standard TOTP (RFC 6238), so Aegis, Ente Auth,
+          1Password, Bitwarden, Authy, Google Authenticator and Microsoft Authenticator all work.
         </p>
       </div>
 

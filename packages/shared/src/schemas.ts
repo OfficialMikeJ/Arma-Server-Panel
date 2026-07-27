@@ -20,18 +20,16 @@ export const totpCodeSchema = z
   .regex(/^\d{6}$/, 'Enter the 6-digit code from your authenticator app');
 
 /**
- * A recovery code, in whatever shape the user pasted it.
+ * A recovery code: sixteen digits, however the user grouped them.
  *
- * Demanding exact `XXXX-XXXX-XXXX-XXXX` uppercase rejected perfectly valid
- * codes typed in lowercase or pasted without the hyphens, and reported it as
- * "invalid code" - indistinguishable from a wrong one. Normalise first, judge
- * afterwards.
+ * Hyphens, spaces or neither all normalise to the same value, so a code typed
+ * from paper is not rejected over punctuation.
  */
 export const recoveryCodeSchema = z
   .string()
   .trim()
-  .transform((value) => value.toUpperCase().replace(/[^A-Z2-7]/g, ''))
-  .refine((value) => value.length === 16, 'Recovery codes are 16 characters');
+  .transform((value) => value.replace(/\D/g, ''))
+  .refine((value) => value.length === 16, 'Recovery codes are 16 digits');
 
 /** Either an authenticator code or a recovery code; the route decides which. */
 export const authCodeSchema = z
@@ -41,9 +39,14 @@ export const authCodeSchema = z
   .max(40)
   .refine((v) => !/[\p{Cc}]/u.test(v), 'Code contains control characters');
 
-/** True when the input looks like a recovery code rather than a TOTP code. */
+/**
+ * True when the input looks like a recovery code rather than a TOTP code.
+ *
+ * Both are numeric now, so length is what separates them: an authenticator
+ * code is 6 digits, a recovery code is 16.
+ */
 export function looksLikeRecoveryCode(value: string): boolean {
-  return value.trim().toUpperCase().replace(/[^A-Z2-7]/g, '').length === 16;
+  return value.trim().replace(/\D/g, '').length === 16;
 }
 
 /**
