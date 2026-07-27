@@ -26,10 +26,12 @@ import { audit, AuditAction } from '../security/audit.js';
 interface Options {
   username: string | null;
   resetTotp: boolean;
+  /** Clear the authenticator but leave the password alone. */
+  keepPassword: boolean;
 }
 
 function parseArgs(argv: string[]): Options {
-  const options: Options = { username: null, resetTotp: false };
+  const options: Options = { username: null, resetTotp: false, keepPassword: false };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -38,13 +40,25 @@ function parseArgs(argv: string[]): Options {
       i += 1;
     } else if (arg === '--reset-2fa') {
       options.resetTotp = true;
+    } else if (arg === '--keep-password') {
+      options.keepPassword = true;
+      // Only useful alongside a 2FA reset - otherwise it does nothing at all.
+      options.resetTotp = true;
     } else if (arg === '--help' || arg === '-h') {
       console.log(
         [
-          'Reset an administrator password.',
+          'Administrator recovery.',
           '',
-          '  --username, -u <name>   which admin to reset (default: the first)',
-          '  --reset-2fa             also clear the authenticator enrolment',
+          '  --username, -u <name>   which admin (default: the first)',
+          '  --reset-2fa             clear the authenticator enrolment',
+          '  --keep-password         clear 2FA only, leave the password as it is',
+          '',
+          'Examples:',
+          '  # locked out entirely',
+          '  node dist/scripts/reset-admin-password.js --reset-2fa',
+          '',
+          '  # password is fine, just cannot reach the authenticator',
+          '  node dist/scripts/reset-admin-password.js --keep-password',
           '',
         ].join('\n'),
       );
@@ -93,18 +107,24 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const password = temporaryPassword();
+  const password = options.keepPassword ? null : temporaryPassword();
 
   await prisma.account.update({
     where: { id: account.id },
     data: {
-      passwordHash: await hashPassword(password),
-      // The existing forced-change flow takes over from here, so this
-      // temporary value cannot become a permanent password.
-      mustChangePassword: true,
-      passwordChangedAt: null,
+      // Always clear the lockout - whatever brought someone to this script,
+      // failed attempts should not keep them out afterwards.
       failedAuthCount: 0,
       lockedUntil: null,
+      ...(password !== null
+        ? {
+            passwordHash: await hashPassword(password),
+            // The existing forced-change flow takes over from here, so this
+            // temporary value cannot become a permanent password.
+            mustChangePassword: true,
+            passwordChangedAt: null,
+          }
+        : {}),
       ...(options.resetTotp
         ? {
             totpSecretEnc: null,
@@ -137,21 +157,25 @@ async function main(): Promise<void> {
     [
       '',
       line,
-      '  TEMPORARY PASSWORD ISSUED',
+      password !== null ? '  TEMPORARY PASSWORD ISSUED' : '  TWO-FACTOR CLEARED',
       '',
       `    Username:  ${account.username}`,
-      `    Password:  ${password}`,
+      password !== null
+        ? `    Password:  ${password}`
+        : '    Password:  unchanged - use the one you already have',
       '',
-      '  Sign in on the "Administrator" tab. You will be required to',
-      '  choose a new password immediately.',
+      '  Sign in on the "Administrator" tab.',
+      password !== null ? '  You will be required to choose a new password immediately.' : '',
       options.resetTotp
-        ? '  Two-factor was cleared - you will re-enrol an authenticator\n  and receive new recovery codes.'
+        ? '  You will be asked to enrol an authenticator, and will receive\n  a fresh set of recovery codes.'
         : '  Your existing authenticator code is still required.',
       '',
-      `  ${revoked} other session${revoked === 1 ? '' : 's'} signed out.`,
+      `  ${revoked} session${revoked === 1 ? '' : 's'} signed out.`,
       line,
       '',
-    ].join('\n'),
+    ]
+      .filter((row) => row !== '')
+      .join('\n'),
   );
 }
 
