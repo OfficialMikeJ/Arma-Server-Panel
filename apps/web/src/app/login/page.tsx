@@ -34,6 +34,7 @@ export default function LoginPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [discordEnabled, setDiscordEnabled] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(true);
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
 
   useEffect(() => {
     api
@@ -240,24 +241,54 @@ export default function LoginPage() {
 
               <div>
                 <label className="label" htmlFor="code">
-                  Code
+                  {useRecoveryCode ? 'Recovery code' : '6-digit code'}
                 </label>
-                <input
-                  id="code"
-                  className="input text-center font-mono text-xl tracking-[0.4em]"
-                  value={code}
-                  onChange={(event) => setCode(event.target.value)}
-                  inputMode="text"
-                  autoComplete="one-time-code"
-                  autoFocus
-                  maxLength={40}
-                  placeholder="000000"
-                  required
-                />
-                <p className="mt-1.5 text-xs text-ink-700">
-                  Lost your authenticator? Enter a recovery code instead — hyphens and capitals do
-                  not matter.
-                </p>
+
+                {useRecoveryCode ? (
+                  <input
+                    id="code"
+                    className="input text-center font-mono text-lg tracking-[0.2em]"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    inputMode="text"
+                    autoComplete="one-time-code"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    autoFocus
+                    maxLength={19}
+                    placeholder="XXXX-XXXX-XXXX-XXXX"
+                    required
+                  />
+                ) : (
+                  <input
+                    id="code"
+                    className="input text-center font-mono text-xl tracking-[0.4em]"
+                    value={code}
+                    // Digits only: a TOTP code is exactly six of them, and
+                    // stripping anything else stops a stray paste blocking it.
+                    onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    maxLength={6}
+                    placeholder="000000"
+                    required
+                  />
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseRecoveryCode((value) => !value);
+                    setCode('');
+                    setError(null);
+                  }}
+                  className="mt-2 text-xs text-brand-500 hover:underline"
+                >
+                  {useRecoveryCode
+                    ? 'Use my authenticator instead'
+                    : 'Lost your authenticator? Use a recovery code'}
+                </button>
               </div>
 
               <label className="flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-ink-900">
@@ -273,7 +304,11 @@ export default function LoginPage() {
                 </span>
               </label>
 
-              <button type="submit" className="btn-primary w-full" disabled={busy || code.length < 6}>
+              <button
+                type="submit"
+                className="btn-primary w-full"
+                disabled={busy || (useRecoveryCode ? code.length < 16 : code.length !== 6)}
+              >
                 {busy ? 'Verifying…' : 'Sign in'}
               </button>
 
