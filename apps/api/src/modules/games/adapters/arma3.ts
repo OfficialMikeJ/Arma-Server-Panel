@@ -5,6 +5,11 @@
  * is generated from a validated object - never by concatenating user strings -
  * and every string value is escaped, because a server name containing a quote
  * or newline would otherwise let a user inject arbitrary config directives.
+ *
+ * The layout follows a stock Arma 3 server.cfg: the same parameters, spellings
+ * and section order. Arma silently ignores keys it does not recognise, so a
+ * plausible-looking invention does not fail loudly - it just never takes
+ * effect, which is far harder to diagnose than a parse error.
  */
 
 import { writeFile, mkdir } from 'node:fs/promises';
@@ -23,24 +28,100 @@ import { badRequest } from '../../../lib/errors.js';
 
 const game = GAMES.arma3;
 
+/** Arma's 0 = never, 1 = limited, 2 = always triple. */
+const visibility = z.number().int().min(0).max(2);
+const toggle = z.union([z.literal(0), z.literal(1)]);
+const ipv4 = z.string().regex(/^(?:\d{1,3}\.){3}\d{1,3}$/, 'Must be an IPv4 address');
+
+/**
+ * The `Options` block of a difficulty preset.
+ *
+ * Only read when forcedDifficulty is "Custom". Key names follow the game's own
+ * vocabulary exactly - an unrecognised one is dropped by the engine, which
+ * looks like the setting simply not working.
+ */
+const difficultySchema = z
+  .object({
+    groupIndicators: visibility.default(1),
+    friendlyTags: visibility.default(1),
+    enemyTags: visibility.default(0),
+    detectedMines: visibility.default(0),
+    commands: visibility.default(1),
+    waypoints: visibility.default(1),
+    weaponInfo: visibility.default(2),
+    stanceIndicator: visibility.default(2),
+    reducedDamage: toggle.default(0),
+    staminaBar: toggle.default(1),
+    weaponCrosshair: toggle.default(1),
+    visionAid: toggle.default(0),
+    thirdPersonView: toggle.default(1),
+    cameraShake: toggle.default(1),
+    scoreTable: toggle.default(1),
+    deathMessages: toggle.default(1),
+    vonID: toggle.default(1),
+    mapContent: toggle.default(1),
+    autoReport: toggle.default(1),
+    multipleSaves: toggle.default(0),
+    aiLevelPreset: z.number().int().min(0).max(3).default(3),
+    skillAI: z.number().min(0).max(1).default(0.5),
+    precisionAI: z.number().min(0).max(1).default(0.5),
+  })
+  .default({});
+
+/** Order mirrors the file, so the two are easy to read side by side. */
+const DIFFICULTY_OPTION_KEYS = [
+  'groupIndicators', 'friendlyTags', 'enemyTags', 'detectedMines', 'commands',
+  'waypoints', 'weaponInfo', 'stanceIndicator', 'reducedDamage', 'staminaBar',
+  'weaponCrosshair', 'visionAid', 'thirdPersonView', 'cameraShake', 'scoreTable',
+  'deathMessages', 'vonID', 'mapContent', 'autoReport', 'multipleSaves',
+] as const;
+
 const configSchema = z.object({
+  /* Global */
   hostname: z.string().min(1).max(96),
   password: z.string().max(64).default(''),
   maxPlayers: z.number().int().min(1).max(game.maxSlots),
+  logFile: z.string().max(64).default('server_console.log'),
   motd: z.array(z.string().max(120)).max(10).default([]),
   motdInterval: z.number().int().min(0).max(3600).default(5),
+
+  /* Joining rules */
+  kickDuplicate: toggle.default(1),
   verifySignatures: z.union([z.literal(0), z.literal(2)]).default(2),
-  requiredSecureId: z.number().int().min(0).max(2).default(2),
-  battleEye: z.union([z.literal(0), z.literal(1)]).default(1),
-  persistent: z.union([z.literal(0), z.literal(1)]).default(1),
-  disableVoN: z.union([z.literal(0), z.literal(1)]).default(0),
-  vonCodecQuality: z.number().int().min(0).max(30).default(10),
-  timeStampFormat: z.enum(['none', 'short', 'full']).default('short'),
-  logFile: z.string().max(64).default('server_console.log'),
-  votingThreshold: z.number().min(0).max(2).default(0.33),
+  // 0 = nobody, 1 = headless clients only, 2 = everybody. Defaults closed:
+  // file patching lets a client load loose scripts over the mission's own.
+  allowedFilePatching: z.number().int().min(0).max(2).default(0),
+  requiredBuild: z.number().int().min(0).max(999_999).nullable().default(null),
+  loopback: toggle.default(0),
+
+  /* Whitelists */
+  admins: z
+    .array(z.string().regex(/^\d{5,20}$/, 'Admin entries must be Steam64 IDs'))
+    .max(64)
+    .default([]),
+  headlessClients: z.array(ipv4).max(16).default([]),
+  localClient: z.array(ipv4).max(16).default([]),
+
+  /* Voting */
   voteMissionPlayers: z.number().int().min(1).max(256).default(1),
-  kickDuplicate: z.union([z.literal(0), z.literal(1)]).default(1),
-  allowedFilePatching: z.number().int().min(0).max(2).default(1),
+  voteThreshold: z.number().min(0).max(2).default(0.33),
+
+  /* In-game */
+  forceRotorLibSimulation: z.number().int().min(0).max(2).default(0),
+  disableVoN: toggle.default(0),
+  vonCodec: toggle.default(1),
+  vonCodecQuality: z.number().int().min(0).max(30).default(10),
+  persistent: toggle.default(1),
+  timeStampFormat: z.enum(['none', 'short', 'full']).default('short'),
+  battleEye: toggle.default(1),
+  drawingInMap: toggle.default(1),
+  disconnectTimeout: z.number().int().min(5).max(90).default(90),
+  maxDesync: z.number().int().min(0).max(1000).default(150),
+  maxPing: z.number().int().min(0).max(1000).default(200),
+  maxPacketLoss: z.number().int().min(0).max(100).default(50),
+  forcedDifficulty: z.enum(['Recruit', 'Regular', 'Veteran', 'Custom']).default('Custom'),
+  difficulty: difficultySchema,
+
   missions: z
     .array(
       z.object({
@@ -50,20 +131,31 @@ const configSchema = z.object({
     )
     .max(32)
     .default([]),
-  admins: z
-    .array(z.string().regex(/^\d{5,20}$/, 'Admin entries must be Steam64 IDs'))
-    .max(64)
-    .default([]),
 });
 
 export type Arma3Config = z.infer<typeof configSchema>;
+
+/**
+ * Extensions the mission may load at runtime.
+ *
+ * Fixed, not configurable. `loadFile`/`preprocessFile` with an open extension
+ * list is a file-read primitive inside the server process, so exposing it
+ * through the config API would turn "edit your server settings" into "read
+ * arbitrary files from the game container". These are the values Bohemia ship.
+ */
+const ALLOWED_LOAD_EXTENSIONS = [
+  'hpp', 'sqs', 'sqf', 'fsm', 'cpp', 'paa', 'txt', 'xml', 'inc', 'ext',
+  'sqm', 'ods', 'fxy', 'lip', 'csv', 'kb', 'bik', 'bikb', 'html', 'htm', 'biedi',
+];
+const ALLOWED_HTML_EXTENSIONS = ['htm', 'html', 'xml', 'txt'];
 
 /**
  * Escapes a value for Arma's config syntax.
  *
  * Backslashes first, then quotes; control characters removed entirely. Without
  * this, `hostname = "x"; adminPassword = "y"` in a server name would become
- * two directives.
+ * two directives. Nothing else is escaped - a URL in a server name must survive
+ * intact, slashes and all.
  */
 function cfgString(value: string): string {
   const escaped = value
@@ -73,8 +165,132 @@ function cfgString(value: string): string {
   return `"${escaped}"`;
 }
 
-function cfgArray(values: string[]): string {
+function cfgArray(values: readonly string[]): string {
   return `{${values.map(cfgString).join(', ')}}`;
+}
+
+/**
+ * Renders `server.cfg`.
+ *
+ * Separated from the write so it can be tested without a database, a volume or
+ * an encryption key - the shape of this file is the difference between a server
+ * that boots and one that exits while parsing its config.
+ */
+export function renderServerCfg(
+  config: Arma3Config,
+  secrets: Pick<ServerSecrets, 'adminPassword' | 'rconPassword'>,
+): string {
+  const options = config.difficulty;
+
+  const lines: string[] = [
+    '//',
+    '// Generated by Arma Server Panel. Manual edits are overwritten on start.',
+    '// Change these from the panel instead: Server -> Settings.',
+    '//',
+    '',
+    '// GLOBAL SETTINGS',
+    `hostname = ${cfgString(config.hostname)};`,
+    `password = ${cfgString(config.password)};`,
+    `passwordAdmin = ${cfgString(secrets.adminPassword)};`,
+    `serverCommandPassword = ${cfgString(secrets.rconPassword)};`,
+    '',
+    `logFile = ${cfgString(config.logFile)};`,
+    '',
+    `motd[] = ${cfgArray(config.motd)};`,
+    `motdInterval = ${config.motdInterval};`,
+    '',
+    '// JOINING RULES',
+    `maxPlayers = ${config.maxPlayers};`,
+    `kickDuplicate = ${config.kickDuplicate};`,
+    `verifySignatures = ${config.verifySignatures};`,
+    `allowedFilePatching = ${config.allowedFilePatching};`,
+    ...(config.requiredBuild === null ? [] : [`requiredBuild = ${config.requiredBuild};`]),
+    '',
+    `loopback = ${config.loopback};`,
+    '// Always off. The panel opens ports itself and records what it opened;',
+    '// letting the game do it too leaves duplicate router mappings behind that',
+    '// nothing ever cleans up.',
+    'upnp = 0;',
+    '',
+    '// WHITELISTS',
+    `admins[] = ${cfgArray(config.admins)};`,
+    `headlessClients[] = ${cfgArray(config.headlessClients)};`,
+    `localClient[] = ${cfgArray(config.localClient)};`,
+    '',
+    '// VOTING',
+    `voteMissionPlayers = ${config.voteMissionPlayers};`,
+    `voteThreshold = ${config.voteThreshold};`,
+    '',
+    '// INGAME SETTINGS',
+    `forceRotorLibSimulation = ${config.forceRotorLibSimulation};`,
+    `disableVoN = ${config.disableVoN};`,
+    `vonCodec = ${config.vonCodec};`,
+    `vonCodecQuality = ${config.vonCodecQuality};`,
+    `persistent = ${config.persistent};`,
+    `timeStampFormat = ${cfgString(config.timeStampFormat)};`,
+    `BattlEye = ${config.battleEye};`,
+    `drawingInMap = ${config.drawingInMap};`,
+    `allowedLoadFileExtensions[] = ${cfgArray(ALLOWED_LOAD_EXTENSIONS)};`,
+    `allowedPreprocessFileExtensions[] = ${cfgArray(ALLOWED_LOAD_EXTENSIONS)};`,
+    `allowedHTMLLoadExtensions[] = ${cfgArray(ALLOWED_HTML_EXTENSIONS)};`,
+    `disconnectTimeout = ${config.disconnectTimeout};`,
+    `maxdesync = ${config.maxDesync};`,
+    `maxping = ${config.maxPing};`,
+    `maxpacketloss = ${config.maxPacketLoss};`,
+    `forcedDifficulty = ${cfgString(config.forcedDifficulty)};`,
+    '',
+    '// SCRIPTING ISSUES',
+    // Left empty deliberately. These are SQF the server executes on connect;
+    // accepting them through the config API would be remote code execution
+    // inside the game server, dressed up as a setting.
+    'onUserConnected = "";',
+    'onUserDisconnected = "";',
+    'doubleIdDetected = "";',
+    '',
+    '// SIGNATURE VERIFICATION',
+    'onUnsignedData = "kick (_this select 0)";',
+    'onHackedData = "kick (_this select 0)";',
+    'onDifferentData = "";',
+    '',
+    '// MISSIONS CYCLE',
+    'class Missions',
+    '{',
+  ];
+
+  config.missions.forEach((mission, index) => {
+    lines.push(
+      `    class Mission_${index}`,
+      '    {',
+      `        template = ${cfgString(mission.template)};`,
+      `        difficulty = ${cfgString(mission.difficulty)};`,
+      '    };',
+    );
+  });
+
+  lines.push(
+    '};',
+    '',
+    '// DIFFICULTY',
+    'class DifficultyPresets',
+    '{',
+    '    class CustomDifficulty',
+    '    {',
+    '        class Options',
+    '        {',
+    ...DIFFICULTY_OPTION_KEYS.map((key) => `            ${key} = ${options[key]};`),
+    '        };',
+    `        aiLevelPreset = ${options.aiLevelPreset};`,
+    '    };',
+    '    class CustomAILevel',
+    '    {',
+    `        skillAI = ${options.skillAI};`,
+    `        precisionAI = ${options.precisionAI};`,
+    '    };',
+    '};',
+    '',
+  );
+
+  return lines.join('\n');
 }
 
 export const arma3Adapter: GameAdapter = {
@@ -109,6 +325,9 @@ export const arma3Adapter: GameAdapter = {
       ASP_GAME: 'arma3',
       ASP_SLOTS: String(server.slots),
       ASP_BASE_PORT: String(server.basePort),
+      // Arma derives the Steam query and master ports from -port as +1 and +2.
+      // They are not settable in server.cfg, which is why every server is given
+      // a wide port block rather than a tightly packed one.
       ASP_GAME_PORT: String(server.basePort),
       ASP_QUERY_PORT: String(server.basePort + 1),
       ASP_BATTLEYE_PORT: String(server.basePort + 4),
@@ -130,55 +349,11 @@ export const arma3Adapter: GameAdapter = {
     const config = configSchema.parse(server.config);
     const secrets = readSecrets(server);
 
-    const lines: string[] = [
-      '// Generated by Arma Server Panel. Manual edits are overwritten on start.',
-      `hostname = ${cfgString(config.hostname)};`,
-      `password = ${cfgString(config.password)};`,
-      `passwordAdmin = ${cfgString(secrets.adminPassword)};`,
-      `serverCommandPassword = ${cfgString(secrets.rconPassword)};`,
-      `maxPlayers = ${config.maxPlayers};`,
-      // Pin the Steam ports rather than relying on Arma deriving them from
-      // -port. Left unset they fall back to the stock 2303/2304, which means
-      // the first server on the host wins them and every other one silently
-      // fails to register with Steam and to answer A2S queries - so the panel
-      // reports the server as offline with zero players even while it runs.
-      `steamQueryPort = ${server.basePort + 1};`,
-      `steamPort = ${server.basePort + 2};`,
-      `motd[] = ${cfgArray(config.motd)};`,
-      `motdInterval = ${config.motdInterval};`,
-      `verifySignatures = ${config.verifySignatures};`,
-      `requiredSecureId = ${config.requiredSecureId};`,
-      `BattlEye = ${config.battleEye};`,
-      `persistent = ${config.persistent};`,
-      `disableVoN = ${config.disableVoN};`,
-      `vonCodecQuality = ${config.vonCodecQuality};`,
-      `timeStampFormat = ${cfgString(config.timeStampFormat)};`,
-      `logFile = ${cfgString(config.logFile)};`,
-      `voteThreshold = ${config.votingThreshold};`,
-      `voteMissionPlayers = ${config.voteMissionPlayers};`,
-      `kickDuplicate = ${config.kickDuplicate};`,
-      `allowedFilePatching = ${config.allowedFilePatching};`,
-      `admins[] = ${cfgArray(config.admins)};`,
-      '',
-      'class Missions',
-      '{',
-    ];
-
-    config.missions.forEach((mission, index) => {
-      lines.push(
-        `    class Mission_${index}`,
-        '    {',
-        `        template = ${cfgString(mission.template)};`,
-        `        difficulty = ${cfgString(mission.difficulty)};`,
-        '    };',
-      );
-    });
-
-    lines.push('};', '');
-
     const configDir = path.join(server.volumePath, 'config');
     await mkdir(configDir, { recursive: true, mode: 0o750 });
-    await writeFile(path.join(configDir, 'server.cfg'), lines.join('\n'), { mode: 0o640 });
+    await writeFile(path.join(configDir, 'server.cfg'), renderServerCfg(config, secrets), {
+      mode: 0o640,
+    });
 
     // BattlEye RCON config lives beside it and carries its own password.
     const beDir = path.join(server.volumePath, 'battleye');

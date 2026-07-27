@@ -31,6 +31,77 @@ const { createPinnedLookup } = await import('../src/security/pinned-lookup.js');
 const { resolveWithin } = await import('../src/modules/files/file-service.js');
 const { redact, parseAssistantResponse } = await import('../src/modules/ai/ai-assistant.js');
 const { GAMES, PORT_ALLOCATION } = await import('@asp/shared');
+const { renderServerCfg, arma3Adapter } = await import(
+  '../src/modules/games/adapters/arma3.js'
+);
+
+/* ------------------------------------------------------------------ */
+
+describe('Arma 3 server.cfg', () => {
+  const defaults = arma3Adapter.defaultConfig({ name: 'Test Server', slots: 32 }) as never;
+  const render = (overrides: Record<string, unknown> = {}) =>
+    renderServerCfg({ ...(defaults as object), ...overrides } as never, {
+      adminPassword: 'admin-secret',
+      rconPassword: 'rcon-secret',
+    });
+
+  it('emits the parameters a stock config carries', () => {
+    const cfg = render();
+    for (const key of [
+      'hostname', 'password', 'passwordAdmin', 'serverCommandPassword', 'logFile',
+      'motd[]', 'motdInterval', 'maxPlayers', 'kickDuplicate', 'verifySignatures',
+      'allowedFilePatching', 'loopback', 'upnp', 'admins[]', 'headlessClients[]',
+      'localClient[]', 'voteMissionPlayers', 'voteThreshold', 'forceRotorLibSimulation',
+      'disableVoN', 'vonCodec', 'vonCodecQuality', 'persistent', 'timeStampFormat',
+      'BattlEye', 'drawingInMap', 'allowedLoadFileExtensions[]',
+      'allowedPreprocessFileExtensions[]', 'allowedHTMLLoadExtensions[]',
+      'disconnectTimeout', 'maxdesync', 'maxping', 'maxpacketloss', 'forcedDifficulty',
+      'onUserConnected', 'onUserDisconnected', 'doubleIdDetected',
+      'onUnsignedData', 'onHackedData', 'onDifferentData',
+    ]) {
+      assert.ok(cfg.includes(`${key} = `), `server.cfg is missing ${key}`);
+    }
+    assert.ok(cfg.includes('class Missions'));
+    assert.ok(cfg.includes('class DifficultyPresets'));
+    assert.ok(cfg.includes('class CustomAILevel'));
+  });
+
+  it('omits parameters Arma 3 does not read', () => {
+    const cfg = render();
+    // Operation Flashpoint leftovers, and Steam ports that Arma derives from
+    // -port rather than reading from the config.
+    for (const key of ['requiredSecureId', 'steamPort', 'steamQueryPort']) {
+      assert.ok(!cfg.includes(key), `server.cfg should not carry ${key}`);
+    }
+  });
+
+  it('never lets the game manage its own port forwarding', () => {
+    assert.ok(render().includes('upnp = 0;'));
+  });
+
+  it('keeps a URL in the server name intact but neutralises quotes', () => {
+    const cfg = render({
+      hostname: 'TDE Survival NA #1 - https://discord.gg/ykkkjwDnAD For mod List',
+    });
+    assert.ok(cfg.includes('https://discord.gg/ykkkjwDnAD'));
+
+    const injected = render({ hostname: 'evil"; passwordAdmin = "owned' });
+    assert.ok(!/passwordAdmin = "owned/.test(injected));
+    assert.ok(injected.includes('evil""; passwordAdmin = ""owned'));
+  });
+
+  it('balances every brace it opens', () => {
+    const cfg = render({ missions: [{ template: 'MyMission.Altis', difficulty: 'regular' }] });
+    const opens = (cfg.match(/\{/g) ?? []).length;
+    const closes = (cfg.match(/\}/g) ?? []).length;
+    assert.equal(opens, closes, 'unbalanced braces would stop the server parsing its config');
+    assert.ok(cfg.includes('template = "MyMission.Altis";'));
+  });
+
+  it('defaults file patching closed', () => {
+    assert.ok(render().includes('allowedFilePatching = 0;'));
+  });
+});
 
 /* ------------------------------------------------------------------ */
 
