@@ -298,6 +298,11 @@ model Node {
   /// Address players connect to. Never an operator's raw home IP unless they
   /// explicitly opted out of relay mode.
   publicHost        String
+  /// The operator stated this address rather than it being discovered, so it is
+  /// fixed: a static IP or a DNS name they control. The panel then stops trying
+  /// to rediscover it, and treats a port forwarded by hand as a real, permanent
+  /// mapping instead of a failed automatic one.
+  staticPublicHost  Boolean    @default(false)
   /// True when traffic egresses through a relay so the host IP stays private.
   relayEnabled      Boolean    @default(false)
   relayEndpoint     String?

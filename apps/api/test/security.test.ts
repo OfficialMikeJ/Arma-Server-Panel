@@ -40,6 +40,7 @@ const { CONFIG_FIELDS, getConfigValue, setConfigValue, unmappedConfigKeys } = aw
 );
 const { hasDirectPublicAddress } = await import('../src/modules/network/nat-traversal.js');
 const { resetConfigForTests } = await import('../src/config/env.js');
+const { confirmStaticForwards } = await import('../src/modules/network/port-forwarder.js');
 
 /* ------------------------------------------------------------------ */
 
@@ -192,6 +193,85 @@ describe('Deployment detection', () => {
       }
     });
   }
+});
+
+describe('Static public address', () => {
+  it('marks a node static when the operator states the address', () => {
+    // Stating an address is the statement that it is fixed. Both the create and
+    // update paths infer it, so an operator with a static IP does not have to
+    // find a second checkbox before their manual forward stops being reported
+    // as a failure.
+    const inferred = (publicHost?: string, explicit?: boolean) =>
+      explicit ?? Boolean(publicHost);
+
+    assert.equal(inferred('203.0.113.5'), true);
+    assert.equal(inferred('play.example.com'), true);
+    assert.equal(inferred(undefined), false);
+    // An explicit false still wins, for a dynamic address stated once.
+    assert.equal(inferred('203.0.113.5', false), false);
+  });
+
+  const manualOutcomes = () =>
+    [
+      { portKey: 'game', externalPort: 2302, method: 'MANUAL', success: false, publicHost: null, message: 'Forward 2302/udp.' },
+      { portKey: 'steamQuery', externalPort: 2303, method: 'MANUAL', success: false, publicHost: null, message: 'Forward 2303/udp.' },
+    ] as never[];
+
+  const staticNode = { state: 'RUNNING', node: { publicHost: '198.51.100.9', staticPublicHost: true } };
+
+  it('confirms a hand-made forward instead of reporting failure', async () => {
+    const outcomes = manualOutcomes();
+    // The query port answers, which proves the block is forwarded.
+    await confirmStaticForwards(staticNode, outcomes, async () => ({ name: 'TDE Survival' }));
+
+    assert.ok(
+      outcomes.every((o: { success: boolean }) => o.success),
+      'a forward the panel can reach should not be reported as a failure',
+    );
+    assert.ok(
+      outcomes.every((o: { publicHost: string | null }) => o.publicHost === '198.51.100.9'),
+      'the confirmed address should be published',
+    );
+  });
+
+  it('leaves it as a failure when nothing answers', async () => {
+    const outcomes = manualOutcomes();
+    await confirmStaticForwards(staticNode, outcomes, async () => null);
+    assert.ok(outcomes.every((o: { success: boolean }) => !o.success));
+  });
+
+  it('does not claim success while the server is stopped', async () => {
+    const outcomes = manualOutcomes();
+    let probed = false;
+    await confirmStaticForwards({ ...staticNode, state: 'OFFLINE' }, outcomes, async () => {
+      probed = true;
+      return { name: 'x' };
+    });
+
+    assert.equal(probed, false, 'a stopped server cannot answer, so it should not be probed');
+    assert.ok(outcomes.every((o: { success: boolean }) => !o.success));
+    assert.match(
+      (outcomes[0] as { message: string }).message,
+      /Start the server/,
+      'it should say how to get the forward confirmed',
+    );
+  });
+
+  it('does nothing for a node whose address is not fixed', async () => {
+    const outcomes = manualOutcomes();
+    let probed = false;
+    await confirmStaticForwards(
+      { state: 'RUNNING', node: { publicHost: '198.51.100.9', staticPublicHost: false } },
+      outcomes,
+      async () => {
+        probed = true;
+        return { name: 'x' };
+      },
+    );
+
+    assert.equal(probed, false);
+    assert.ok(outcomes.every((o: { success: boolean }) => !o.success));
+  });
 });
 
 describe('Config path helpers', () => {

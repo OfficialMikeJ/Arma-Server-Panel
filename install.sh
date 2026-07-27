@@ -510,6 +510,14 @@ DOCKER_GID=${_docker_gid}
 
 # Needed for automatic port forwarding: the API is containerised and cannot
 # see the LAN on its own.
+# Public address players connect to.
+#
+# Leave commented to auto-detect from the router. Set it if you have a static
+# IP or a DNS name you control: the panel then treats it as fixed, and verifies
+# a port you forwarded by hand instead of reporting it as a failed automatic
+# mapping. Required on a router with UPnP switched off.
+#PUBLIC_GAME_HOST=
+
 LAN_ADDRESS=${_ip}
 ROUTER_ADDRESS=${_router:-}
 

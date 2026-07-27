@@ -29,6 +29,8 @@ const createNodeSchema = z.object({
   dockerEndpoint: z.string().trim().min(1).max(256).default('/var/run/docker.sock'),
   dataRoot: z.string().trim().min(1).max(512),
   publicHost: z.string().trim().min(1).max(255),
+  /// Defaults to true whenever publicHost is stated explicitly.
+  staticPublicHost: z.boolean().optional(),
   portRangeStart: z.number().int().min(1024).max(65000).default(2001),
   portRangeEnd: z.number().int().min(1024).max(65535).default(40000),
   relayEnabled: z.boolean().default(false),
@@ -80,6 +82,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
         locationLabel: node.locationLabel,
         status: node.status,
         publicHost: node.publicHost,
+        staticPublicHost: node.staticPublicHost,
         dataRoot: node.dataRoot,
         portRange: { start: node.portRangeStart, end: node.portRangeEnd },
         relayEnabled: node.relayEnabled,
@@ -137,6 +140,12 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
     const publicHost =
       body.publicHost ?? config.PUBLIC_GAME_HOST ?? environment.externalAddress ?? '';
 
+    // Stated by the operator - a static IP, or a DNS name they control - rather
+    // than discovered from the router. Fixed addresses do not need
+    // rediscovering, and a port forwarded once by hand stays forwarded.
+    const staticPublicHost =
+      body.staticPublicHost ?? Boolean(body.publicHost ?? config.PUBLIC_GAME_HOST);
+
     if (!publicHost) {
       throw preconditionFailed(
         'Could not determine a public address for this node. Set PUBLIC_GAME_HOST or supply publicHost.',
@@ -161,6 +170,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
         downloadMbps: Math.round(report.throughput?.downloadMbps ?? 0),
         uploadMbps: Math.round(report.throughput?.uploadMbps ?? 0),
         publicHost,
+        staticPublicHost,
         relayEnabled: body.relayEnabled && isRelayConfigured(),
         relayEndpoint: body.relayEndpoint,
         portRangeStart: body.portRangeStart,
@@ -207,6 +217,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
         status: z.enum(['ONLINE', 'DEGRADED', 'OFFLINE', 'MAINTENANCE']).optional(),
         locationLabel: z.string().trim().min(2).max(64).optional(),
         publicHost: z.string().trim().min(1).max(255).optional(),
+        staticPublicHost: z.boolean().optional(),
         relayEnabled: z.boolean().optional(),
         portRangeStart: z.number().int().min(1024).max(65000).optional(),
         portRangeEnd: z.number().int().min(1024).max(65535).optional(),
@@ -224,7 +235,15 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
-    const updated = await prisma.node.update({ where: { id: nodeId }, data: body });
+    // Stating an address is itself the statement that it is fixed. Without this
+    // an operator could set their static IP and still be told, on every attempt,
+    // that automatic port opening had failed.
+    const data =
+      body.publicHost !== undefined && body.staticPublicHost === undefined
+        ? { ...body, staticPublicHost: true }
+        : body;
+
+    const updated = await prisma.node.update({ where: { id: nodeId }, data });
     return reply.send({ node: { id: updated.id, status: updated.status } });
   });
 

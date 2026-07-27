@@ -50,6 +50,7 @@ import {
 } from './nat-traversal.js';
 import { openRelayTunnel, closeRelayTunnel, isRelayConfigured } from './relay.js';
 import { getAdapter } from '../games/registry.js';
+import { queryA2SInfo } from '../games/protocols/a2s.js';
 import { toGameId } from '../servers/server-service.js';
 
 export type PreferredMethod = 'auto' | 'upnp' | 'natpmp' | 'pcp' | 'relay' | 'manual';
@@ -114,7 +115,23 @@ export async function forwardServerPorts(request: ForwardRequest): Promise<Forwa
     const outcome = await forwardSinglePort(mapping, port.portKey, request.preferred, environment, {
       serverId: server.id,
       relayEnabled: server.useRelay,
+      publicHost: server.node.staticPublicHost ? server.node.publicHost : null,
+      staticPublicHost: server.node.staticPublicHost,
     });
+
+    outcomes.push(outcome);
+  }
+
+  // A node with a fixed address may already be forwarded by hand - the usual
+  // case for a static IP on a router with UPnP switched off. Ask the server
+  // itself, from outside, before calling that a failure: a working setup
+  // should not show a permanent red cross just because the panel did not open
+  // the port personally.
+  await confirmStaticForwards(server, outcomes);
+
+  for (const outcome of outcomes) {
+    const port = publicPorts.find((p) => p.portKey === outcome.portKey);
+    if (!port) continue;
 
     await prisma.portAllocation.update({
       where: { id: port.id },
@@ -129,8 +146,6 @@ export async function forwardServerPorts(request: ForwardRequest): Promise<Forwa
         lastVerifiedAt: new Date(),
       },
     });
-
-    outcomes.push(outcome);
   }
 
   const anySuccess = outcomes.some((o) => o.success);
@@ -188,12 +203,70 @@ export async function forwardServerPorts(request: ForwardRequest): Promise<Forwa
   return outcomes;
 }
 
+/**
+ * Verifies manual forwards on a node with a fixed public address.
+ *
+ * Queries the game through that address exactly as a player's client would. If
+ * it answers, the forward is real and every manual outcome is upgraded to a
+ * success - the panel did not make the mapping, but the mapping exists, which
+ * is the thing that matters.
+ *
+ * Only the query port can be spoken to from outside, so a positive answer there
+ * is taken as proof for the whole block: they were forwarded together, and the
+ * game would not have registered at all if the game port were shut.
+ */
+export async function confirmStaticForwards(
+  server: { state: string; node: { publicHost: string; staticPublicHost: boolean } },
+  outcomes: ForwardOutcome[],
+  /** Injectable so the decision can be tested without a live server. */
+  probe: (host: string, port: number) => Promise<{ name: string } | null> = (host, port) =>
+    queryA2SInfo(host, port, 4000),
+): Promise<void> {
+  if (!server.node.staticPublicHost || !server.node.publicHost) return;
+
+  const manual = outcomes.filter((o) => o.method === PortMethod.MANUAL && !o.success);
+  if (manual.length === 0) return;
+
+  if (server.state !== 'RUNNING') {
+    for (const outcome of manual) {
+      outcome.message =
+        `${outcome.message} Start the server and open ports again to have this confirmed.`;
+    }
+    return;
+  }
+
+  const queryOutcome = outcomes.find((o) => o.portKey === 'steamQuery' || o.portKey === 'a2s');
+  if (!queryOutcome) return;
+
+  const info = await probe(server.node.publicHost, queryOutcome.externalPort).catch(() => null);
+  if (!info) return;
+
+  logger.info(
+    { host: server.node.publicHost, port: queryOutcome.externalPort },
+    'Manual forward confirmed reachable on a static address',
+  );
+
+  for (const outcome of manual) {
+    outcome.success = true;
+    outcome.publicHost = server.node.publicHost;
+    outcome.message =
+      `Reachable on ${server.node.publicHost}:${outcome.externalPort}. The forward is already in ` +
+      `place on your router and this address is fixed, so there is nothing further to do.`;
+  }
+}
+
 async function forwardSinglePort(
   mapping: MappingRequest,
   portKey: string,
   preferred: PreferredMethod,
   environment: NatEnvironment,
-  context: { serverId: string; relayEnabled: boolean },
+  context: {
+    serverId: string;
+    relayEnabled: boolean;
+    /** The node's address, when the operator has stated a fixed one. */
+    publicHost: string | null;
+    staticPublicHost: boolean;
+  },
 ): Promise<ForwardOutcome> {
   const base = {
     portKey,
@@ -366,6 +439,27 @@ async function forwardSinglePort(
   }
 
   /* ---- Nothing automatic worked ---- */
+  const target = environment.localAddress ?? 'this machine';
+  const forward = `Forward ${mapping.externalPort}/${mapping.protocol} to ${target} on your router`;
+
+  // With a fixed address the forward is a one-off, not a recurring failure.
+  // Whether it is actually in place is decided by the reachability probe in
+  // forwardServerPorts, which can upgrade this to a success.
+  if (context.staticPublicHost && context.publicHost) {
+    return {
+      ...base,
+      method: PortMethod.MANUAL,
+      success: false,
+      publicHost: context.publicHost,
+      leaseSeconds: null,
+      message:
+        `${forward}. This node has a fixed public address (${context.publicHost}), so the forward ` +
+        `only has to be made once - the panel will confirm it as soon as the server is running.` +
+        (failures.length > 0 ? ` Automatic methods were unavailable (${failures.join('; ')}).` : ''),
+      exposesHostIp: true,
+    };
+  }
+
   return {
     ...base,
     method: PortMethod.MANUAL,
@@ -375,8 +469,8 @@ async function forwardSinglePort(
     message:
       failures.length > 0
         ? `Automatic port opening did not succeed (${failures.join('; ')}). ` +
-          `Forward ${mapping.externalPort}/${mapping.protocol} to ${environment.localAddress ?? 'this machine'} on your router, or enable relay mode.`
-        : `Forward ${mapping.externalPort}/${mapping.protocol} to ${environment.localAddress ?? 'this machine'} on your router, or enable relay mode.`,
+          `${forward}, or enable relay mode.`
+        : `${forward}, or enable relay mode.`,
     exposesHostIp: true,
   };
 }
