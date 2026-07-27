@@ -28,10 +28,10 @@ export async function allocatePorts(params: {
   const game = getGame(params.gameId);
 
   // What the game actually binds, versus the window reserved for it. Arma 3
-  // touches five consecutive ports but wants far more elbow room around them -
-  // see PORT_ALLOCATION.blockStride.
+  // touches five consecutive ports but Bohemia ask for 100 between instances,
+  // so the block is far wider than the span - see GameDefinition.portBlock.
   const portSpan = Math.max(...game.ports.map((p) => p.offset)) + 1;
-  const blockSize = Math.max(PORT_ALLOCATION.blockStride, portSpan);
+  const blockSize = Math.max(game.portBlock.stride, portSpan);
 
   return prisma.$transaction(async (tx) => {
     // Serialise allocation across concurrent requests.
@@ -43,9 +43,6 @@ export async function allocatePorts(params: {
     });
     if (!node) throw preconditionFailed('Node not found.', 'node_missing');
 
-    const rangeStart = Math.max(node.portRangeStart, PORT_ALLOCATION.min);
-    const rangeEnd = Math.min(node.portRangeEnd, PORT_ALLOCATION.max);
-
     const taken = await tx.portAllocation.findMany({
       where: { nodeId: params.nodeId },
       select: { externalPort: true },
@@ -54,20 +51,38 @@ export async function allocatePorts(params: {
     const used = new Set<number>(taken.map((t) => t.externalPort));
     for (const reserved of PORT_ALLOCATION.reserved) used.add(reserved);
 
-    // Step by the block size so blocks never interleave.
-    let basePort: number | null = null;
-    for (let candidate = rangeStart; candidate + blockSize - 1 <= rangeEnd; candidate += blockSize) {
-      let free = true;
-      for (let offset = 0; offset < blockSize; offset += 1) {
-        if (used.has(candidate + offset)) {
-          free = false;
-          break;
+    // Step by the block size so blocks never interleave, and check the whole
+    // window - not just the ports we record - so a title that reserves elbow
+    // room actually gets it.
+    const scan = (from: number, to: number): number | null => {
+      for (let candidate = from; candidate + blockSize - 1 <= to; candidate += blockSize) {
+        let free = true;
+        for (let offset = 0; offset < blockSize; offset += 1) {
+          if (used.has(candidate + offset)) {
+            free = false;
+            break;
+          }
         }
+        if (free) return candidate;
       }
-      if (free) {
-        basePort = candidate;
-        break;
-      }
+      return null;
+    };
+
+    // The title's own band first, so the first Arma 3 server lands on 2302 and
+    // the first Reforger server on 2001 - the ports an operator setting this up
+    // by hand would have used.
+    let basePort = scan(
+      game.portBlock.base,
+      Math.min(game.portBlock.rangeEnd, node.portRangeEnd, PORT_ALLOCATION.max),
+    );
+
+    // Only if that band is full, or the operator has deliberately moved this
+    // node's range away from it, fall back to the node's own range.
+    if (basePort === null) {
+      basePort = scan(
+        Math.max(node.portRangeStart, PORT_ALLOCATION.min),
+        Math.min(node.portRangeEnd, PORT_ALLOCATION.max),
+      );
     }
 
     if (basePort === null) {

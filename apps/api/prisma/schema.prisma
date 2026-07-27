@@ -302,7 +302,7 @@ model Node {
   relayEnabled      Boolean    @default(false)
   relayEndpoint     String?
 
-  portRangeStart    Int        @default(20000)
+  portRangeStart    Int        @default(2001)
   portRangeEnd      Int        @default(40000)
 
   /// Result of the mandatory host-requirements gate.

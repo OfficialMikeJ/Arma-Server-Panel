@@ -211,26 +211,16 @@ export const METRICS = Object.freeze({
 });
 
 /** Port ranges the allocator may hand out. Never overlaps privileged ports. */
+/**
+ * Outer bounds for anything the panel hands to a game server.
+ *
+ * Each title's actual placement comes from its own `portBlock` in GAMES - see
+ * there for why Arma 3 starts at 2302 and steps by 100. These are only the
+ * limits an operator's node range is clamped to.
+ */
 export const PORT_ALLOCATION = Object.freeze({
-  min: 20000,
+  min: 2001,
   max: 40000,
-  /**
-   * Every server is given a whole block this wide, whatever game it runs.
-   *
-   * Arma 3 sets the floor. It does not confine itself to the ports it is told
-   * about: the game port, Steam query, Steam master, VoN and BattlEye are all
-   * derived from `-port`, and Bohemia's own guidance for running several
-   * dedicated servers on one machine is to step the port by 100. Packing blocks
-   * tightly appears to work and then produces query failures and Steam
-   * registration clashes that are extremely hard to attribute.
-   *
-   * A single stride for all titles also means blocks from different games can
-   * never interleave, which a per-game stride would allow.
-   *
-   * 20000-40000 at this stride is 200 servers per node - far beyond what any
-   * host meeting the minimum requirements could actually run.
-   */
-  blockStride: 100,
   /** Ports reserved by the panel itself and never allocated to a game server. */
   reserved: [] as number[],
 });

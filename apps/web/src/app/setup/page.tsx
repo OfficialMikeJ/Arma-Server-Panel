@@ -81,7 +81,7 @@ export default function SetupPage() {
         locationLabel: String(form.get('locationLabel') ?? '').trim(),
         publicHost: String(form.get('publicHost') ?? '').trim() || undefined,
         dataRoot: String(form.get('dataRoot') ?? '').trim() || undefined,
-        portRangeStart: Number(form.get('portRangeStart') ?? 20000),
+        portRangeStart: Number(form.get('portRangeStart') ?? 2001),
         portRangeEnd: Number(form.get('portRangeEnd') ?? 40000),
       });
       await load();
@@ -298,7 +298,7 @@ export default function SetupPage() {
                     name="portRangeStart"
                     type="number"
                     className="input"
-                    defaultValue={20000}
+                    defaultValue={2001}
                   />
                 </div>
                 <div>

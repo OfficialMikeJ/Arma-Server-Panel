@@ -42,6 +42,22 @@ export interface GameDefinition {
   cpu: { min: number; recommended: number };
   storageGib: { min: number; recommended: number };
   ports: PortSpec[];
+  /**
+   * Where this title's servers sit on the host.
+   *
+   * Each title keeps its own band so two of them can never be handed
+   * overlapping blocks, and each band starts on the port that title
+   * conventionally uses - players, launchers and direct-connect dialogs all
+   * assume it.
+   */
+  portBlock: {
+    /** First port used, and the title's canonical default. */
+    base: number;
+    /** Distance between consecutive servers. */
+    stride: number;
+    /** Last port this title may occupy. */
+    rangeEnd: number;
+  };
   configFormat: ConfigFormat;
   configFileName: string;
   modSource: ModSource;
@@ -70,13 +86,19 @@ export const GAMES: Readonly<Record<GameId, GameDefinition>> = Object.freeze({
     memoryMib: { min: 8 * 1024, recommended: 16 * 1024 },
     cpu: { min: 2, recommended: 6 },
     storageGib: { min: 40, recommended: 80 },
+    // 2302 game + VoN, 2303 Steam query, 2304 Steam master, 2305 VoN
+    // (reserved, unused), 2306 BattlEye. Arma derives every one of these from
+    // -port; none of them can be set individually.
     ports: [
-      { key: 'game', label: 'Game', protocol: 'udp', offset: 0, public: true },
+      { key: 'game', label: 'Game + VoN', protocol: 'udp', offset: 0, public: true },
       { key: 'steamQuery', label: 'Steam Query', protocol: 'udp', offset: 1, public: true },
       { key: 'steamMaster', label: 'Steam Master', protocol: 'udp', offset: 2, public: true },
-      { key: 'von', label: 'VoN', protocol: 'udp', offset: 3, public: true },
+      { key: 'von', label: 'VoN (reserved)', protocol: 'udp', offset: 3, public: true },
       { key: 'battleye', label: 'BattlEye RCON', protocol: 'udp', offset: 4, public: false, optional: true },
     ],
+    // Bohemia: leave at least 100 ports between instances. So 2302, 2402,
+    // 2502 - the same layout an operator would set up by hand.
+    portBlock: { base: 2302, stride: 100, rangeEnd: 12301 },
     configFormat: 'arma-cpp',
     configFileName: 'server.cfg',
     modSource: 'steam-workshop',
@@ -103,12 +125,17 @@ export const GAMES: Readonly<Record<GameId, GameDefinition>> = Object.freeze({
     memoryMib: { min: 8 * 1024, recommended: 16 * 1024 },
     cpu: { min: 4, recommended: 6 },
     storageGib: { min: 30, recommended: 60 },
+    // Reforger's stock layout is 2001 game, 17777 A2S, 19999 RCON - but unlike
+    // Arma 3 every one of them is set explicitly in config.json, so the panel
+    // packs them next to the game port instead of scattering three bands.
     ports: [
       { key: 'game', label: 'Game', protocol: 'udp', offset: 0, public: true },
       { key: 'a2s', label: 'A2S Query', protocol: 'udp', offset: 1, public: true, optional: true },
       { key: 'rcon', label: 'Reforger RCON', protocol: 'udp', offset: 2, public: false, optional: true },
       { key: 'battleye', label: 'BattlEye RCON', protocol: 'udp', offset: 3, public: false, optional: true },
     ],
+    // Starts on the stock 2001 and stops below Arma 3's band.
+    portBlock: { base: 2001, stride: 10, rangeEnd: 2301 },
     configFormat: 'json',
     configFileName: 'config.json',
     modSource: 'reforger-workshop',
@@ -140,6 +167,10 @@ export const GAMES: Readonly<Record<GameId, GameDefinition>> = Object.freeze({
       { key: 'a2s', label: 'A2S Query', protocol: 'udp', offset: 1, public: true, optional: true },
       { key: 'rcon', label: 'RCON', protocol: 'udp', offset: 2, public: false, optional: true },
     ],
+    // Provisional: Arma 4 has not shipped, so there is no conventional port to
+    // anchor to yet. Sits above Arma 3's band so nothing has to move when the
+    // real numbers are known.
+    portBlock: { base: 12302, stride: 10, rangeEnd: 22301 },
     configFormat: 'json',
     configFileName: 'config.json',
     modSource: 'none',

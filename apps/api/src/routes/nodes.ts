@@ -29,7 +29,7 @@ const createNodeSchema = z.object({
   dockerEndpoint: z.string().trim().min(1).max(256).default('/var/run/docker.sock'),
   dataRoot: z.string().trim().min(1).max(512),
   publicHost: z.string().trim().min(1).max(255),
-  portRangeStart: z.number().int().min(1024).max(65000).default(20000),
+  portRangeStart: z.number().int().min(1024).max(65000).default(2001),
   portRangeEnd: z.number().int().min(1024).max(65535).default(40000),
   relayEnabled: z.boolean().default(false),
   relayEndpoint: z.string().max(256).nullable().default(null),

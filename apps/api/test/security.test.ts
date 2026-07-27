@@ -106,21 +106,48 @@ describe('Arma 3 server.cfg', () => {
 /* ------------------------------------------------------------------ */
 
 describe('Port allocation', () => {
+  it('starts each released title on the port it conventionally uses', () => {
+    // Arma 3's five ports are 2302-2306 and every one is derived from -port.
+    assert.equal(GAMES.arma3.portBlock.base, 2302);
+    // Reforger's stock game port.
+    assert.equal(GAMES.reforger.portBlock.base, 2001);
+  });
+
+  it('spaces Arma 3 servers by at least 100, as Bohemia require', () => {
+    // "Leave at least 100 ports between instances": 2302, 2402, 2502. Packing
+    // them tightly produces Steam registration clashes that look like a broken
+    // server rather than a port problem.
+    assert.ok(GAMES.arma3.portBlock.stride >= 100);
+  });
+
   it('gives every game a block wide enough for the ports it binds', () => {
     for (const game of Object.values(GAMES)) {
       const span = Math.max(...game.ports.map((p) => p.offset)) + 1;
       assert.ok(
-        span <= PORT_ALLOCATION.blockStride,
-        `${game.name} needs ${span} ports, wider than the ${PORT_ALLOCATION.blockStride} stride`,
+        span <= game.portBlock.stride,
+        `${game.name} needs ${span} ports but strides only ${game.portBlock.stride}`,
+      );
+      assert.ok(
+        game.portBlock.base >= PORT_ALLOCATION.min &&
+          game.portBlock.rangeEnd <= PORT_ALLOCATION.max,
+        `${game.name}'s band falls outside the allocator's bounds`,
       );
     }
   });
 
-  it('spaces Arma 3 servers by at least 100, as Bohemia require', () => {
-    // Arma 3 derives Steam query, Steam master, VoN and BattlEye from -port and
-    // does not confine itself to them. Packing blocks tightly produces Steam
-    // registration clashes that look like a broken server, not a port problem.
-    assert.ok(PORT_ALLOCATION.blockStride >= 100);
+  it('never lets two titles be handed overlapping blocks', () => {
+    const bands = Object.values(GAMES)
+      .map((g) => ({ name: g.name, ...g.portBlock }))
+      .sort((a, b) => a.base - b.base);
+
+    for (let i = 1; i < bands.length; i += 1) {
+      const previous = bands[i - 1]!;
+      const current = bands[i]!;
+      assert.ok(
+        current.base > previous.rangeEnd,
+        `${current.name} starts at ${current.base}, inside ${previous.name}'s band`,
+      );
+    }
   });
 
   it('keeps administrative ports out of the public set for every game', () => {
@@ -134,13 +161,16 @@ describe('Port allocation', () => {
   });
 
   it('gives Arma 3 the documented five-port layout', () => {
-    const offsets = Object.fromEntries(GAMES.arma3.ports.map((p) => [p.key, p.offset]));
-    assert.deepEqual(offsets, {
-      game: 0,
-      steamQuery: 1,
-      steamMaster: 2,
-      von: 3,
-      battleye: 4,
+    const { base } = GAMES.arma3.portBlock;
+    const actual = Object.fromEntries(
+      GAMES.arma3.ports.map((p) => [p.key, base + p.offset]),
+    );
+    assert.deepEqual(actual, {
+      game: 2302,
+      steamQuery: 2303,
+      steamMaster: 2304,
+      von: 2305,
+      battleye: 2306,
     });
   });
 });
