@@ -36,6 +36,8 @@ import {
   type NatEnvironment,
 } from './nat-traversal.js';
 import { openRelayTunnel, closeRelayTunnel, isRelayConfigured } from './relay.js';
+import { getAdapter } from '../games/registry.js';
+import { toGameId } from '../servers/server-service.js';
 
 export type PreferredMethod = 'auto' | 'upnp' | 'natpmp' | 'pcp' | 'relay' | 'manual';
 
@@ -119,13 +121,36 @@ export async function forwardServerPorts(request: ForwardRequest): Promise<Forwa
   }
 
   const anySuccess = outcomes.some((o) => o.success);
-  const publicHost = outcomes.find((o) => o.success && o.publicHost)?.publicHost;
 
-  if (publicHost) {
-    await prisma.server.update({
+  // The address players actually use comes from the "game" port. A relay hands
+  // back a different public port from the one allocated locally, so recording
+  // only the host would leave the panel - and the game's own master-server
+  // registration - advertising a port nobody can reach.
+  const gameOutcome = outcomes.find((o) => o.portKey === 'game' && o.success);
+  const publicHost =
+    gameOutcome?.publicHost ?? outcomes.find((o) => o.success && o.publicHost)?.publicHost;
+
+  if (publicHost || gameOutcome) {
+    const updated = await prisma.server.update({
       where: { id: server.id },
-      data: { publicHost },
+      data: {
+        ...(publicHost ? { publicHost } : {}),
+        ...(gameOutcome ? { publicBasePort: gameOutcome.externalPort } : {}),
+      },
     });
+
+    // Rewrite the game config so the advertised address matches. Without this
+    // the change only takes effect on the next start, and a running server
+    // keeps announcing the old one.
+    try {
+      const adapter = getAdapter(toGameId(updated.game));
+      await adapter.writeConfig(updated);
+    } catch (error) {
+      logger.warn(
+        { err: error, serverId: server.id },
+        'Could not rewrite the game config after remapping ports',
+      );
+    }
   }
 
   await audit({
