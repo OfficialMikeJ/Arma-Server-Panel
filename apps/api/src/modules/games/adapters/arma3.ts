@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { GAMES, type ModEntry } from '@asp/shared';
 import type { Server } from '@prisma/client';
 import type { GameAdapter, ParsedLogEvent, QueryResult, ServerSecrets } from '../adapter.js';
+import { loadConfig } from '../../../config/env.js';
 import { decryptSecretToString } from '../../../security/crypto.js';
 import { queryA2SInfo } from '../protocols/a2s.js';
 import { runRconCommand } from '../protocols/battleye-rcon.js';
@@ -101,6 +102,7 @@ export const arma3Adapter: GameAdapter = {
   },
 
   buildEnv(server) {
+    const config = loadConfig();
     return {
       ASP_SERVER_ID: server.id,
       ASP_GAME: 'arma3',
@@ -113,6 +115,11 @@ export const arma3Adapter: GameAdapter = {
       ASP_MODS_FILE: `${CONTAINER_DATA_PATH}/config/mods.txt`,
       STEAM_APP_ID: String(game.steamAppId),
       STEAM_GAME_APP_ID: String(game.steamGameAppId),
+      // Only set when configured; an empty value would make SteamCMD attempt
+      // an anonymous login, which cannot fetch a paid title and fails with a
+      // far less obvious error than "credentials missing".
+      ...(config.STEAM_USERNAME ? { STEAM_USERNAME: config.STEAM_USERNAME } : {}),
+      ...(config.STEAM_PASSWORD ? { STEAM_PASSWORD: config.STEAM_PASSWORD } : {}),
       LANG: 'C.UTF-8',
       TZ: 'UTC',
     };

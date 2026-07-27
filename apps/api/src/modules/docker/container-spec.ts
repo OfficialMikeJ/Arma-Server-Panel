@@ -69,6 +69,14 @@ const ALLOWED_ENV_KEYS = new Set([
   'ASP_MAX_FPS', 'ASP_CONFIG_FILE', 'ASP_MODS_FILE', 'ASP_PERSISTENCE',
   'ASP_STARTUP_PARAMS', 'ASP_LOG_LEVEL', 'ASP_PUBLIC_HOST',
   'STEAM_APP_ID', 'STEAM_GAME_APP_ID', 'STEAM_BETA',
+  // Arma 3's dedicated server is not free, so SteamCMD needs an account that
+  // owns it. Reforger needs neither and is never given them.
+  //
+  // These land in the container's environment, which anyone able to run
+  // `docker inspect` can read - that is already root on the host. Use a
+  // dedicated Steam account with no purchases and Steam Guard disabled, never
+  // a personal one.
+  'STEAM_USERNAME', 'STEAM_PASSWORD',
   'LANG', 'LC_ALL', 'TZ',
 ]);
 

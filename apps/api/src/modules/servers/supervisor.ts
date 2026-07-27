@@ -149,6 +149,10 @@ class ServerSupervisor {
       }
 
       if (crashed || oom) {
+        // A container that dies within a second of starting is gone before the
+        // log stream attaches, so "exit code 1" arrives with no explanation.
+        // Pull whatever it did print and put it on the console.
+        await this.emitCrashOutput(server.id, server.containerName);
         await this.handleCrash(server, status.exitCode ?? -1, oom);
       } else {
         await setState(server.id, 'OFFLINE');
@@ -163,6 +167,48 @@ class ServerSupervisor {
         this.attachments.get(serverId)?.stream?.destroy();
         this.attachments.delete(serverId);
       }
+    }
+  }
+
+  /**
+   * Reads the final output of an exited container onto the server console.
+   *
+   * Without this a fast failure - a missing credential, a bad config line -
+   * surfaces only as an exit code, which tells an operator nothing about what
+   * to fix.
+   */
+  private async emitCrashOutput(serverId: string, containerName: string): Promise<void> {
+    try {
+      const stream = await getLogStream(containerName, { follow: false, tail: 40 });
+      const carry = { buffer: Buffer.alloc(0) };
+      const lines: string[] = [];
+
+      await new Promise<void>((resolve) => {
+        const done = (): void => resolve();
+        stream.on('data', (chunk: Buffer) => {
+          demuxDockerStream(
+            chunk,
+            (_kind, rawLine) => {
+              const text = rawLine.replace(/^\S+Z\s?/, '').trim();
+              if (text) lines.push(text);
+            },
+            carry,
+          );
+        });
+        stream.on('end', done);
+        stream.on('error', done);
+        setTimeout(done, 5000).unref();
+      });
+
+      if (lines.length === 0) return;
+
+      emitPanelNotice(serverId, '--- last output before it exited ---');
+      for (const line of lines.slice(-40)) {
+        appendConsoleLine(serverId, 'stderr', line);
+      }
+      emitPanelNotice(serverId, '--- end of output ---');
+    } catch {
+      // Diagnostics are best-effort; never let them mask the crash itself.
     }
   }
 
