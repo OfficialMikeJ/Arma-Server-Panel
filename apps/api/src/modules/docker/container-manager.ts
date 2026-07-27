@@ -9,7 +9,8 @@
 import type Docker from 'dockerode';
 import type { Duplex, Readable } from 'node:stream';
 import path from 'node:path';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { getGame, type GameId } from '@asp/shared';
 import { loadConfig } from '../../config/env.js';
 import { requireDocker } from './docker-client.js';
@@ -392,6 +393,30 @@ export async function imageExists(image: string): Promise<boolean> {
  * `onProgress` receives build output line by line, which the caller pipes into
  * the server console so the operator can watch rather than stare at a spinner.
  */
+/**
+ * Fingerprint of the build inputs.
+ *
+ * Stored as a label on the image and compared before reuse, so editing a
+ * Dockerfile or entrypoint actually rebuilds. Checking only whether the tag
+ * exists means a fixed image is never picked up - which is how a container
+ * kept running as the wrong uid long after the fix was deployed.
+ */
+async function buildFingerprint(contextDir: string): Promise<string> {
+  const hash = createHash('sha256');
+
+  for (const name of ['Dockerfile', 'entrypoint.sh']) {
+    try {
+      hash.update(await readFile(path.join(contextDir, name)));
+    } catch {
+      hash.update(`missing:${name}`);
+    }
+  }
+
+  return hash.digest('hex').slice(0, 16);
+}
+
+const FINGERPRINT_LABEL = 'io.armaserverpanel.build-fingerprint';
+
 export async function ensureGameImage(
   gameId: GameId,
   onProgress?: (line: string) => void,
@@ -399,10 +424,24 @@ export async function ensureGameImage(
   const game = getGame(gameId);
   const image = game.image;
 
-  if (await imageExists(image)) return;
-
   const config = loadConfig();
   const contextDir = path.join(config.GAME_IMAGE_ROOT, gameId);
+  const fingerprint = await buildFingerprint(contextDir);
+
+  if (await imageExists(image)) {
+    const docker = await requireDocker();
+    const info = await docker.getImage(image).inspect().catch(() => null);
+    const existing = info?.Config?.Labels?.[FINGERPRINT_LABEL];
+
+    if (existing === fingerprint) return;
+
+    onProgress?.(
+      existing
+        ? 'The build files for this game changed since the image was built. Rebuilding.'
+        : 'This image predates build fingerprinting. Rebuilding once to pick up any fixes.',
+    );
+    logger.info({ image, existing, fingerprint }, 'Game image is stale, rebuilding');
+  }
 
   // A clear message here beats a raw ENOENT from the Docker daemon.
   try {
@@ -421,7 +460,12 @@ export async function ensureGameImage(
 
   const stream = await docker.buildImage(
     { context: contextDir, src: ['Dockerfile', 'entrypoint.sh'] },
-    { t: image, rm: true, forcerm: true },
+    {
+      t: image,
+      rm: true,
+      forcerm: true,
+      labels: { [FINGERPRINT_LABEL]: fingerprint },
+    },
   );
 
   await new Promise<void>((resolve, reject) => {
