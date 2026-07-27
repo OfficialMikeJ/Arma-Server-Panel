@@ -63,8 +63,11 @@ export function ServerConsole({ serverId, canWrite }: Props) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
-  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptRef = useRef(0);
+  // Bumped whenever a socket closes unexpectedly. The reconnect effect keys off
+  // it, so the timer belongs to an effect with real cleanup rather than to a
+  // closure inside the socket handler.
+  const [reconnectTick, setReconnectTick] = useState(0);
 
   const appendLines = useCallback((incoming: ConsoleLine[]) => {
     setLines((previous) => {
@@ -140,21 +143,28 @@ export function ServerConsole({ serverId, canWrite }: Props) {
         return;
       }
       attemptRef.current += 1;
-      const delay = Math.min(30_000, 1000 * 2 ** Math.min(attemptRef.current, 5));
-      reconnectRef.current = setTimeout(connect, delay);
+      setReconnectTick((tick) => tick + 1);
     };
   }, [serverId, appendLines]);
 
   useEffect(() => {
     connect();
     return () => {
-      if (reconnectRef.current) clearTimeout(reconnectRef.current);
-      reconnectRef.current = null;
       detach(socketRef.current);
       socketRef.current?.close();
       socketRef.current = null;
     };
   }, [connect]);
+
+  /* ---- Reconnect, with exponential backoff ---- */
+  useEffect(() => {
+    if (reconnectTick === 0) return;
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(attemptRef.current, 5));
+    const handle = setTimeout(connect, delay);
+    // Cancels on unmount and whenever the server changes, so a pending
+    // reconnect can never redial a console the operator has left.
+    return () => clearTimeout(handle);
+  }, [reconnectTick, connect]);
 
   /* ---- Auto-scroll, unless the operator has scrolled up to read ---- */
   useEffect(() => {

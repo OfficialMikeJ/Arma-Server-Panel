@@ -61,9 +61,19 @@ set -- \
   -maxFPS "${ASP_MAX_FPS:-60}" \
   -logStats 60000 \
   -bindPort "${ASP_GAME_PORT:-2001}" \
-  -a2sQueryEnabled \
   -nds "${ASP_NDS:-3}" \
   -listScenarios
+
+# A2S is a startup flag, not a config field. It was passed unconditionally, so
+# the panel's "Answer A2S queries" setting did nothing either way.
+if [ "${ASP_A2S_ENABLED:-1}" = "1" ]; then
+  set -- "$@" -a2sQueryEnabled
+fi
+
+# Also a startup parameter rather than a config field.
+if [ -n "${ASP_AUTO_RELOAD:-}" ]; then
+  set -- "$@" -autoReload "${ASP_AUTO_RELOAD}"
+fi
 
 # Reforger downloads its own workshop content on start; the panel supplies the
 # mod list inside config.json.

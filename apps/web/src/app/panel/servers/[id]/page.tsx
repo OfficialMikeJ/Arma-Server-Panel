@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   GAMES,
@@ -103,6 +103,29 @@ export default function ServerDetailPage({ params }: { params: Promise<{ id: str
     void load();
   }, [load]);
 
+  /**
+   * One-shot timers that must not outlive the page.
+   *
+   * The "re-read after a power action" timer would otherwise fire a request for
+   * a server the operator had already navigated away from.
+   */
+  const timeouts = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const schedule = useCallback((fn: () => void, delayMs: number) => {
+    const handle = setTimeout(() => {
+      timeouts.current.delete(handle);
+      fn();
+    }, delayMs);
+    timeouts.current.add(handle);
+  }, []);
+
+  useEffect(() => {
+    const pending = timeouts.current;
+    return () => {
+      for (const handle of pending) clearTimeout(handle);
+      pending.clear();
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -190,7 +213,7 @@ export default function ServerDetailPage({ params }: { params: Promise<{ id: str
               onClick={() => {
                 void navigator.clipboard?.writeText(server.address);
                 setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
+                schedule(() => setCopied(false), 1500);
               }}
             >
               {copied ? 'Copied' : 'Copy'}
@@ -222,7 +245,7 @@ export default function ServerDetailPage({ params }: { params: Promise<{ id: str
               previous ? { ...previous, server: { ...previous.server, state } } : previous,
             );
             // Re-read shortly after: transitions settle asynchronously.
-            setTimeout(() => void load(), 2500);
+            schedule(() => void load(), 2500);
           }}
         />
       </section>

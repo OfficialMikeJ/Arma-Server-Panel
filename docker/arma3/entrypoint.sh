@@ -81,6 +81,7 @@ cd "${GAME_DIR}"
 
 set -- \
   -config="${CONFIG_DIR}/server.cfg" \
+  -cfg="${CONFIG_DIR}/basic.cfg" \
   -profiles="${PROFILE_DIR}" \
   -name=server \
   -port="${ASP_GAME_PORT:-2302}" \

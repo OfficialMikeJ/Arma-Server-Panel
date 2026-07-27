@@ -128,6 +128,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy('general');
     setError(null);
     setDetails([]);
+    setNotice(null);
     try {
       await api.patch(`/servers/${id}`, { name, autoStart, autoRestart, crashRestartLimit });
       setNotice('Saved.');
@@ -142,6 +143,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy('resources');
     setError(null);
     setDetails([]);
+    setNotice(null);
     try {
       await api.patch(`/servers/${id}/resources`, {
         cpuCores,
@@ -164,6 +166,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy('delete');
     setError(null);
     setDetails([]);
+    setNotice(null);
     try {
       // The API requires the typed name too - this is not a client-side-only
       // guard, so a stray API call cannot delete a server either.
@@ -180,6 +183,7 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setBusy('config');
     setError(null);
     setDetails([]);
+    setNotice(null);
 
     // Whichever view is open is the one being saved. The other is regenerated
     // from whatever the server returns, so the two can never disagree.

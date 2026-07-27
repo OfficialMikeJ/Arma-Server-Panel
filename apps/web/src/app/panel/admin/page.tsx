@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { formatBytes, formatMemory, formatStorage } from '@asp/shared';
+import { formatMemory, formatStorage } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
 
 /**

@@ -42,10 +42,19 @@ const configSchema = z.object({
   disableThirdPerson: z.boolean().default(false),
   fastValidation: z.boolean().default(true),
   serverMaxViewDistance: z.number().int().min(500).max(10000).default(2500),
-  serverMinGrassDistance: z.number().int().min(0).max(150).default(50),
+  // Reforger accepts 0 (off) or 50-150. Anything between is rejected by the
+  // engine at load, which reads as "the server just won't start".
+  serverMinGrassDistance: z
+    .union([z.literal(0), z.number().int().min(50).max(150)])
+    .default(50),
   networkViewDistance: z.number().int().min(500).max(5000).default(1500),
   aiLimit: z.number().int().min(-1).max(1000).default(-1),
   playerSaveTime: z.number().int().min(30).max(3600).default(120),
+  slotReservationTimeout: z.number().int().min(5).max(300).default(60),
+  // No autoReload here. It was written into the `operating` block, which
+  // Reforger does not read - the engine takes it as the -autoReload startup
+  // parameter, so the setting silently did nothing. Passed through the
+  // container environment instead, see buildEnv.
   autoReload: z.number().int().min(0).max(3600).default(0),
   scenarioId: z
     .string()
@@ -58,7 +67,26 @@ const configSchema = z.object({
   rconPermission: z.enum(['admin', 'monitor']).default('admin'),
   a2sEnabled: z.boolean().default(true),
   missionHeader: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
-});
+})
+  // Reforger refuses to start on an inconsistent pair rather than resolving it,
+  // and the error it gives does not name either field.
+  .superRefine((config, ctx) => {
+    if (!config.supportedPlatforms.includes('PLATFORM_PC')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['supportedPlatforms'],
+        message: 'PLATFORM_PC must always be listed.',
+      });
+    }
+    if (!config.crossPlatform && config.supportedPlatforms.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['crossPlatform'],
+        message:
+          'Cross-platform play is off, so only PLATFORM_PC may be listed in supportedPlatforms.',
+      });
+    }
+  });
 
 export type ReforgerConfig = z.infer<typeof configSchema>;
 
@@ -85,9 +113,15 @@ export const reforgerAdapter: GameAdapter = {
   },
 
   buildEnv(server) {
+    // Parsed rather than read raw: a config stored before a setting existed
+    // would otherwise leave the variable undefined.
+    const config = configSchema.parse(server.config);
     return {
       ASP_SERVER_ID: server.id,
       ASP_GAME: 'reforger',
+      // Startup parameters, not config fields - see the schema.
+      ...(config.autoReload > 0 ? { ASP_AUTO_RELOAD: String(config.autoReload) } : {}),
+      ASP_A2S_ENABLED: config.a2sEnabled ? '1' : '0',
       ASP_SLOTS: String(server.slots),
       ASP_BASE_PORT: String(server.basePort),
       ASP_GAME_PORT: String(server.basePort),
@@ -162,8 +196,11 @@ export const reforgerAdapter: GameAdapter = {
         playerSaveTime: config.playerSaveTime,
         aiLimit: config.aiLimit,
         disableCrashReporter: true,
-        disableNavmeshStreaming: [] as string[],
-        ...(config.autoReload > 0 ? { autoReload: config.autoReload } : {}),
+        // disableNavmeshStreaming is deliberately absent. Reforger reads an
+        // empty array as "disable navmesh streaming for every world", not as
+        // "disable nothing" - which is what the panel was asking for, and it
+        // degrades AI pathing on every server it wrote.
+        slotReservationTimeout: config.slotReservationTimeout,
       },
     };
 

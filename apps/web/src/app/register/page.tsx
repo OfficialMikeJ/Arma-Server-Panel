@@ -169,6 +169,10 @@ export default function RegisterPage() {
   }
 
   if (banned) {
+    // Reading the clock during render is impure, but this is a static notice on
+    // a screen that is not going to re-render on a timer - recomputing it in an
+    // effect would only add a render pass to say the same thing.
+    // eslint-disable-next-line react-hooks/purity
     const minutes = Math.max(1, Math.ceil((banned.until - Date.now()) / 60000));
     return (
       <Shell>

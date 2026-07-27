@@ -289,22 +289,52 @@ export function parsePreset(format: PresetFormat, payload: string): ParsedPreset
       } catch {
         throw badRequest('That is not valid JSON.');
       }
-      const mods = (parsed as { mods?: unknown[] })?.mods;
-      if (!Array.isArray(mods)) throw badRequest('No mod list was found in that file.');
-      return {
-        mods: mods.slice(0, 512).map((entry, index) => {
-          const record = entry as Record<string, unknown>;
-          return {
-            modId: String(record.modId ?? '').slice(0, 64),
-            name: String(record.name ?? '').replace(/[<>]/g, '').slice(0, 160),
-            version: record.version ? String(record.version).slice(0, 32) : null,
-            enabled: record.enabled !== false,
-            order: index,
-            required: Boolean(record.required),
-          };
-        }),
-        warnings: [],
-      };
+      const entries = (parsed as { mods?: unknown[] })?.mods;
+      if (!Array.isArray(entries)) throw badRequest('No mod list was found in that file.');
+
+      // Screened here rather than left to setServerMods. That rejects the whole
+      // import on the first bad id, naming a mod the operator did not write -
+      // where the other two parsers skip the entry and say how many they
+      // skipped. Same treatment for all three.
+      const warnings: string[] = [];
+      const mods: Array<Omit<ModEntry, 'sizeBytes'>> = [];
+      const seen = new Set<string>();
+      let skipped = 0;
+
+      for (const entry of entries.slice(0, 512)) {
+        const record = entry as Record<string, unknown>;
+        const modId = String(record.modId ?? '').trim();
+
+        // A panel export may be for either engine, so accept either id shape
+        // and let setServerMods reject a mismatch against this server's game.
+        const valid = /^\d{6,12}$/.test(modId) || /^[0-9A-F]{16}$/i.test(modId);
+        if (!valid) {
+          skipped += 1;
+          continue;
+        }
+
+        const normalised = /^\d+$/.test(modId) ? modId : modId.toUpperCase();
+        if (seen.has(normalised)) continue;
+        seen.add(normalised);
+
+        mods.push({
+          modId: normalised,
+          name: String(record.name ?? `Workshop item ${normalised}`)
+            .replace(/[<>]/g, '')
+            .slice(0, 160),
+          version: record.version ? String(record.version).slice(0, 32) : null,
+          enabled: record.enabled !== false,
+          order: mods.length,
+          required: Boolean(record.required),
+        });
+      }
+
+      if (skipped > 0) {
+        warnings.push(`${skipped} entries were skipped because their mod id was not valid.`);
+      }
+      if (mods.length === 0) warnings.push('No usable mods were found in that file.');
+
+      return { mods, warnings };
     }
     default:
       throw badRequest('Unsupported preset format.');

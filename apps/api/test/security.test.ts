@@ -31,7 +31,7 @@ const { createPinnedLookup } = await import('../src/security/pinned-lookup.js');
 const { resolveWithin } = await import('../src/modules/files/file-service.js');
 const { redact, parseAssistantResponse } = await import('../src/modules/ai/ai-assistant.js');
 const { GAMES, PORT_ALLOCATION } = await import('@asp/shared');
-const { renderServerCfg, arma3Adapter } = await import(
+const { renderServerCfg, renderBasicCfg, arma3Adapter } = await import(
   '../src/modules/games/adapters/arma3.js'
 );
 const { reforgerAdapter } = await import('../src/modules/games/adapters/reforger.js');
@@ -247,6 +247,34 @@ describe('Arma 3 server.cfg', () => {
 
   it('defaults file patching closed', () => {
     assert.ok(render().includes('allowedFilePatching = 0;'));
+  });
+});
+
+describe('Arma 3 basic.cfg', () => {
+  const defaults = arma3Adapter.defaultConfig({ name: 'Test', slots: 32 }) as never;
+
+  it('emits the network tuning the game expects', () => {
+    const cfg = renderBasicCfg(defaults);
+    for (const key of [
+      'MinBandwidth', 'MaxBandwidth', 'MaxMsgSend', 'MaxSizeGuaranteed',
+      'MaxSizeNonguaranteed', 'MinErrorToSend', 'MinErrorToSendNear', 'MaxCustomFileSize',
+    ]) {
+      assert.match(cfg, new RegExp(`^${key}=[0-9.]+;$`, 'm'), `basic.cfg is missing ${key}`);
+    }
+  });
+
+  it('does not leave the server on Arma’s 128 kbit default', () => {
+    // MinBandwidth defaults to 131072 in the engine, which throttles anything
+    // modern. Writing no basic.cfg at all - which the panel used to do - left
+    // every server there.
+    const config = arma3Adapter.defaultConfig({ name: 'Test', slots: 32 }) as {
+      network: { minBandwidth: number };
+    };
+    assert.ok(config.network.minBandwidth > 131072);
+  });
+
+  it('blocks custom file uploads by default', () => {
+    assert.match(renderBasicCfg(defaults), /^MaxCustomFileSize=0;$/m);
   });
 });
 
