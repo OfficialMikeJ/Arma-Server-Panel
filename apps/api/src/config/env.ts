@@ -108,6 +108,28 @@ const envSchema = z
     /** Public address players connect to for this node. */
     PUBLIC_GAME_HOST: z.string().min(1).optional(),
 
+    /**
+     * The host's own LAN address, e.g. 192.168.2.28.
+     *
+     * The API runs in a container, so the addresses it can see belong to a
+     * Docker bridge (172.x) - not to the machine. Port mappings must point at
+     * the real host, because that is where Docker publishes the ports.
+     * Without this, automatic port forwarding cannot work at all.
+     */
+    LAN_ADDRESS: z.string().min(7).max(45).optional(),
+
+    /**
+     * The router's LAN address, e.g. 192.168.2.1.
+     *
+     * NAT-PMP and PCP are unicast, so a bridged container can reach the router
+     * directly once it knows where to send. UPnP discovery is multicast and
+     * cannot escape the bridge; set UPNP_CONTROL_URL to use UPnP anyway.
+     */
+    ROUTER_ADDRESS: z.string().min(7).max(45).optional(),
+
+    /** Explicit IGD control URL, for when SSDP discovery cannot be used. */
+    UPNP_CONTROL_URL: z.string().url().max(512).optional(),
+
     /** Relay egress used to keep self-hosters' home IPs private. */
     RELAY_ENABLED: boolish.default(false),
     RELAY_ENDPOINT: z.string().optional(),

@@ -22,7 +22,8 @@ import { createSocket } from 'node:dgram';
 import { networkInterfaces } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { logger } from '../../lib/logger.js';
-import { isPrivateAddress } from '../../security/client-identity.js';
+import { loadConfig } from '../../config/env.js';
+import { ipInAnyCidr, isPrivateAddress } from '../../security/client-identity.js';
 
 export type Protocol = 'udp' | 'tcp';
 
@@ -55,13 +56,59 @@ export interface MappingResult {
  * the network address + 1, which is the convention on essentially every
  * consumer router. Candidates are probed, so a wrong guess simply times out.
  */
+/** Docker's default bridge pools. Addresses here belong to a container, not the host. */
+const DOCKER_RANGES = ['172.16.0.0/12', '10.0.0.0/8'];
+
+/**
+ * True when the only addresses visible are Docker bridge addresses.
+ *
+ * A bridged container cannot see the LAN, so anything derived from its own
+ * interfaces describes Docker's network, not the machine's. Detecting this is
+ * the difference between "your router refused" and "we asked the wrong thing".
+ */
+export function isContainerNetwork(): boolean {
+  const addresses: string[] = [];
+
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === 'IPv4' && !entry.internal) addresses.push(entry.address);
+    }
+  }
+
+  if (addresses.length === 0) return false;
+
+  // Docker bridges are 172.17-172.31 by default; a real LAN is usually
+  // 192.168.x or 10.x. If nothing outside the docker pool is visible, we are
+  // almost certainly inside a container.
+  return addresses.every(
+    (address) => ipInAnyCidr(address, DOCKER_RANGES) && address.startsWith('172.'),
+  );
+}
+
 export function guessGateways(): string[] {
+  const config = loadConfig();
   const candidates = new Set<string>();
+
+  // An explicit router address always wins: inside a container it is the only
+  // way to reach the real one, and outside it saves a round of guessing.
+  if (config.ROUTER_ADDRESS) candidates.add(config.ROUTER_ADDRESS);
+
+  // If the operator told us the host's LAN address, derive its gateway too.
+  if (config.LAN_ADDRESS) {
+    const parts = config.LAN_ADDRESS.split('.').map(Number);
+    if (parts.length === 4 && parts.every((p) => Number.isInteger(p))) {
+      candidates.add(`${parts[0]}.${parts[1]}.${parts[2]}.1`);
+    }
+  }
 
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {
       if (address.family !== 'IPv4' || address.internal) continue;
       if (!isPrivateAddress(address.address)) continue;
+      // Skip Docker bridges - their gateway is dockerd, which forwards nothing.
+      if (address.address.startsWith('172.') && ipInAnyCidr(address.address, DOCKER_RANGES)) {
+        continue;
+      }
 
       const ipParts = address.address.split('.').map(Number);
       const maskParts = address.netmask.split('.').map(Number);
@@ -74,19 +121,32 @@ export function guessGateways(): string[] {
   }
 
   // Common defaults, in case interface enumeration was unhelpful.
-  for (const fallback of ['192.168.1.1', '192.168.0.1', '10.0.0.1', '172.16.0.1']) {
+  for (const fallback of ['192.168.1.1', '192.168.0.1', '10.0.0.1']) {
     candidates.add(fallback);
   }
 
   return [...candidates];
 }
 
+/**
+ * The address a port mapping should point at.
+ *
+ * Must be the *host's* LAN address, since that is where Docker publishes the
+ * port. The container's own address is unroutable from the router.
+ */
 export function getLocalAddress(): string | null {
+  const config = loadConfig();
+  if (config.LAN_ADDRESS) return config.LAN_ADDRESS;
+
   for (const addresses of Object.values(networkInterfaces())) {
     for (const address of addresses ?? []) {
-      if (address.family === 'IPv4' && !address.internal && isPrivateAddress(address.address)) {
-        return address.address;
+      if (address.family !== 'IPv4' || address.internal) continue;
+      if (!isPrivateAddress(address.address)) continue;
+      // A container address here would produce a mapping to nowhere.
+      if (address.address.startsWith('172.') && ipInAnyCidr(address.address, DOCKER_RANGES)) {
+        continue;
       }
+      return address.address;
     }
   }
   return null;
@@ -430,6 +490,32 @@ function resolveControlUrl(description: string, location: string): IgdDevice | n
 }
 
 export async function discoverIgd(): Promise<IgdDevice | null> {
+  const config = loadConfig();
+
+  // SSDP is multicast and cannot leave a bridged container, so an explicit
+  // control URL is the only way to use UPnP from inside one.
+  if (config.UPNP_CONTROL_URL) {
+    try {
+      const url = new URL(config.UPNP_CONTROL_URL);
+      logger.info({ controlUrl: url.toString() }, 'Using the configured UPnP control URL');
+      return {
+        location: url.origin,
+        controlUrl: url.toString(),
+        serviceType: 'urn:schemas-upnp-org:service:WANIPConnection:1',
+      };
+    } catch {
+      logger.warn('UPNP_CONTROL_URL is not a valid URL; ignoring it');
+    }
+  }
+
+  if (isContainerNetwork()) {
+    logger.info(
+      'Skipping SSDP discovery: multicast cannot leave a bridged container. ' +
+        'Set UPNP_CONTROL_URL to use UPnP from here.',
+    );
+    return null;
+  }
+
   const locations = await discoverIgdLocations();
   for (const location of locations) {
     const description = await fetchDeviceDescription(location);
@@ -582,6 +668,10 @@ export interface NatEnvironment {
   upnpDevice: IgdDevice | null;
   /** True when the WAN address is itself private - i.e. carrier-grade NAT. */
   behindCgnat: boolean;
+  /** Running in a container that cannot see the LAN by itself. */
+  containerised: boolean;
+  /** Set when configuration is missing and nothing can possibly work. */
+  configurationProblem: string | null;
 }
 
 /**
@@ -589,8 +679,36 @@ export interface NatEnvironment {
  * because SSDP discovery is slow.
  */
 export async function probeNatEnvironment(): Promise<NatEnvironment> {
+  const config = loadConfig();
+  const containerised = isContainerNetwork();
   const localAddress = getLocalAddress();
   const gateways = guessGateways();
+
+  // Bail early with something actionable rather than probing Docker's bridge
+  // and reporting "no gateway found", which sounds like a router fault.
+  if (containerised && (!config.LAN_ADDRESS || !config.ROUTER_ADDRESS)) {
+    const missing = [
+      !config.LAN_ADDRESS ? 'LAN_ADDRESS' : null,
+      !config.ROUTER_ADDRESS ? 'ROUTER_ADDRESS' : null,
+    ].filter(Boolean);
+
+    return {
+      localAddress,
+      gateway: null,
+      externalAddress: null,
+      natpmpAvailable: false,
+      pcpAvailable: false,
+      upnpAvailable: false,
+      upnpDevice: null,
+      behindCgnat: false,
+      containerised: true,
+      configurationProblem:
+        `The panel runs in a container and cannot see your LAN by itself. ` +
+        `Set ${missing.join(' and ')} in .env — ` +
+        `LAN_ADDRESS is this machine's address (the one you browse the panel on), ` +
+        `ROUTER_ADDRESS is your router's.`,
+    };
+  }
 
   let gateway: string | null = null;
   let externalAddress: string | null = null;
@@ -647,5 +765,10 @@ export async function probeNatEnvironment(): Promise<NatEnvironment> {
     // A private WAN address means the ISP is doing the NAT, and no
     // LAN-side protocol can open a port through it.
     behindCgnat: externalAddress !== null && isPrivateAddress(externalAddress),
+    containerised,
+    configurationProblem:
+      localAddress === null
+        ? 'Could not determine this machine’s LAN address. Set LAN_ADDRESS in .env.'
+        : null,
   };
 }

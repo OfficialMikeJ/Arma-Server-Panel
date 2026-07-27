@@ -203,6 +203,19 @@ async function forwardSinglePort(
     logger.warn({ portKey, reason: relay.message }, 'Relay unavailable, falling back to direct mapping');
   }
 
+  /* ---- Misconfiguration: say what to set, not "no gateway found" ---- */
+  if (environment.configurationProblem) {
+    return {
+      ...base,
+      method: PortMethod.MANUAL,
+      success: false,
+      publicHost: null,
+      leaseSeconds: null,
+      message: environment.configurationProblem,
+      exposesHostIp: false,
+    };
+  }
+
   /* ---- Carrier-grade NAT: nothing LAN-side can help ---- */
   if (environment.behindCgnat && preferred !== 'manual') {
     return {
