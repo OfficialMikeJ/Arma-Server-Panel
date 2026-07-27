@@ -184,6 +184,8 @@ export const AuditAction = {
   AccessRequestDenied: 'panel.access.denied',
   NodeCreated: 'panel.node.created',
   NodeUpdated: 'panel.node.updated',
+  SteamCredentialsSaved: 'panel.steam.credentials_saved',
+  SteamCredentialsCleared: 'panel.steam.credentials_cleared',
 
   // networking
   PortMappingCreated: 'network.port.mapped',

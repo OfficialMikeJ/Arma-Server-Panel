@@ -31,6 +31,11 @@ import { audit, AuditAction } from '../security/audit.js';
 import { badRequest, forbidden, notFound } from '../lib/errors.js';
 import { hashPassword } from '../security/password.js';
 import { resolveServerAccess } from '../plugins/auth.js';
+import {
+  clearSteamCredentials,
+  getSteamCredentialStatus,
+  saveSteamCredentials,
+} from '../modules/platform/steam-credentials.js';
 import { generateToken } from '../security/crypto.js';
 import { canonicalizeUsername } from '@asp/shared';
 
@@ -414,6 +419,60 @@ export async function registerPanelAccountRoutes(app: FastifyInstance): Promise<
     });
 
     return reply.send({ ok: true, granted: grantList });
+  });
+
+  /* ---------------------------------------------------------------- */
+  /* Steam credentials                                                 */
+  /* ---------------------------------------------------------------- */
+
+  const settingsGuard = { onRequest: [app.requirePanelPermission('panel:settings')] };
+
+  app.get('/admin/steam-credentials', settingsGuard, async (_request, reply) => {
+    // Status only. The password is never sent back, not even masked - there is
+    // no screen that needs it and every copy of it is another place it can leak.
+    return reply.send(await getSteamCredentialStatus());
+  });
+
+  app.put('/admin/steam-credentials', settingsGuard, async (request, reply) => {
+    const body = z
+      .object({
+        username: z.string().trim().min(1).max(64),
+        password: z.string().min(1).max(256),
+      })
+      .parse(request.body);
+
+    const actor = request.auth.account!;
+    await saveSteamCredentials(body);
+
+    await audit({
+      accountId: actor.id,
+      actorLabel: actor.username,
+      action: AuditAction.SteamCredentialsSaved,
+      targetType: 'panel',
+      ipHash: request.auth.client.ipHash,
+      userAgentHash: request.auth.client.userAgentHash,
+      // The username is recorded so a later "which account was this?" is
+      // answerable. The password obviously is not.
+      metadata: { username: body.username },
+    });
+
+    return reply.send({ ok: true, ...(await getSteamCredentialStatus()) });
+  });
+
+  app.delete('/admin/steam-credentials', settingsGuard, async (request, reply) => {
+    const actor = request.auth.account!;
+    await clearSteamCredentials();
+
+    await audit({
+      accountId: actor.id,
+      actorLabel: actor.username,
+      action: AuditAction.SteamCredentialsCleared,
+      targetType: 'panel',
+      ipHash: request.auth.client.ipHash,
+      userAgentHash: request.auth.client.userAgentHash,
+    });
+
+    return reply.send({ ok: true, ...(await getSteamCredentialStatus()) });
   });
 }
 

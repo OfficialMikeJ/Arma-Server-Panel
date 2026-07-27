@@ -41,7 +41,13 @@ export interface GameAdapter {
   validateConfig(patch: unknown, current: Record<string, unknown>): Record<string, unknown>;
 
   /** Non-secret environment passed to the container. */
-  buildEnv(server: Server): Record<string, string>;
+  /**
+   * Environment for the game container.
+   *
+   * Async because Steam credentials are read from the panel's own store, which
+   * is where an operator sets them - the environment is only a fallback.
+   */
+  buildEnv(server: Server): Promise<Record<string, string>>;
 
   /** Renders and writes the game's native config file into the volume. */
   writeConfig(server: Server): Promise<void>;

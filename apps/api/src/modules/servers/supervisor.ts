@@ -20,6 +20,7 @@ import {
   startContainer,
 } from '../docker/container-manager.js';
 import { appendConsoleLine, emitPanelNotice } from './console-buffer.js';
+import { explainSteamFailure } from '../platform/steam-credentials.js';
 import { getAdapter } from '../games/registry.js';
 import { toGameId, setState } from './server-service.js';
 import { dispatchEvent } from '../integrations/dispatcher.js';
@@ -358,6 +359,8 @@ class ServerSupervisor {
         select: { game: true, name: true },
       });
       const adapter = server ? getAdapter(toGameId(server.game)) : null;
+    // A new attachment means a new run, so a repeat failure is worth repeating.
+    this.steamFailureReported.delete(serverId);
 
       stream.on('data', (chunk: Buffer) => {
         demuxDockerStream(
@@ -377,6 +380,11 @@ class ServerSupervisor {
             if (attachment.pending.length > 5000) {
               attachment.pending.splice(0, attachment.pending.length - 5000);
             }
+
+            // SteamCMD's own wording for a rejected login is easy to miss in a
+            // wall of download output, and the panel would otherwise just say
+            // "crashed". Said plainly, once, in the operator's own console.
+            this.explainSteamFailureOnce(serverId, line.text);
 
             if (adapter) this.handleLogEvent(serverId, adapter.parseLogLine(line.text), server!.name);
           },
@@ -434,6 +442,26 @@ class ServerSupervisor {
   /* ---------------------------------------------------------------- */
 
   /** Batches console lines to the database. "For days, not minutes." */
+  /**
+   * Surfaces a Steam login failure in words an operator can act on.
+   *
+   * Once per attachment: SteamCMD repeats itself, and the same paragraph three
+   * times is noise rather than emphasis. Reset when the container is reattached,
+   * so a later attempt is explained again.
+   */
+  private steamFailureReported = new Set<string>();
+
+  private explainSteamFailureOnce(serverId: string, text: string): void {
+    if (this.steamFailureReported.has(serverId)) return;
+
+    const explanation = explainSteamFailure(text);
+    if (!explanation) return;
+
+    this.steamFailureReported.add(serverId);
+    emitPanelNotice(serverId, explanation);
+    logger.warn({ serverId }, 'Steam login was rejected during install');
+  }
+
   private async flushConsole(): Promise<void> {
     for (const attachment of this.attachments.values()) {
       if (attachment.pending.length === 0) continue;

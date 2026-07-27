@@ -495,7 +495,7 @@ export async function provisionServer(serverId: string): Promise<void> {
         storageGib: server.storageGib,
         bandwidthMbps: server.bandwidthMbps,
       },
-      env: adapter.buildEnv(server),
+      env: await adapter.buildEnv(server),
       serverId: server.id,
       ownerId: server.ownerId,
     });

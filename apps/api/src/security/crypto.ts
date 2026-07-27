@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Cryptographic primitives.
  *
  * Every secret the panel stores on behalf of a user (TOTP seeds, RCON
@@ -42,7 +42,8 @@ export type SecretContext =
   | 'integration'
   | 'ai-key'
   | 'docker-tls'
-  | 'challenge-payload';
+  | 'challenge-payload'
+  | 'steam-credentials';
 
 function keyFor(version: number): Buffer {
   const config = loadConfig();

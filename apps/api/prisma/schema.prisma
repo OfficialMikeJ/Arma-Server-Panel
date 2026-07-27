@@ -849,6 +849,18 @@ model PlatformSettings {
   lastSpeedTestAt       DateTime?
   /// Version of the encryption key currently in use, for key rotation.
   encryptionKeyVersion  Int      @default(1)
+
+  /// Steam account used to download paid dedicated-server packages - Arma 3
+  /// needs one, Reforger does not.
+  ///
+  /// The password is AES-256-GCM encrypted at rest like every other stored
+  /// credential. It is *reversible* by necessity: SteamCMD is handed the real
+  /// password, so this can never be a one-way hash the way an account password
+  /// is. Anyone holding both the database and ENCRYPTION_KEY can recover it,
+  /// which is why the UI tells operators to use a throwaway account.
+  steamUsername         String?
+  steamPasswordEnc      Bytes?
+  steamCredentialsSetAt DateTime?
   /// Random, stable identifier used for anonymous usage reporting. Generated
   /// on first boot and never derived from anything identifying.
   telemetryInstanceId   String?

@@ -68,7 +68,7 @@ export const arma4Adapter: GameAdapter = {
     return result.data;
   },
 
-  buildEnv(server) {
+  async buildEnv(server) {
     return {
       ASP_SERVER_ID: server.id,
       ASP_GAME: 'arma4',

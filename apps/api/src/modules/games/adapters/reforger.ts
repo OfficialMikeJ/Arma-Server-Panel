@@ -112,7 +112,7 @@ export const reforgerAdapter: GameAdapter = {
     return result.data;
   },
 
-  buildEnv(server) {
+  async buildEnv(server) {
     // Parsed rather than read raw: a config stored before a setting existed
     // would otherwise leave the variable undefined.
     const config = configSchema.parse(server.config);

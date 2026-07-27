@@ -5,6 +5,10 @@ import { api, ApiError } from '@/lib/api';
 import { NodeAdmin, type NodeRow } from '@/components/panel/admin/NodeAdmin';
 import { SubAdminAdmin, type PanelAccountRow } from '@/components/panel/admin/SubAdminAdmin';
 import { AccessRequests, type AccessRequestRow } from '@/components/panel/admin/AccessRequests';
+import {
+  SteamCredentials,
+  type SteamCredentialStatus,
+} from '@/components/panel/admin/SteamCredentials';
 
 /**
  * Platform administration: nodes, panel accounts, access requests and the
@@ -32,6 +36,7 @@ export default function AdminPage() {
   const [accounts, setAccounts] = useState<PanelAccountRow[]>([]);
   const [requests, setRequests] = useState<AccessRequestRow[]>([]);
   const [me, setMe] = useState<{ id: string; panelPermissions: string[] } | null>(null);
+  const [steam, setSteam] = useState<SteamCredentialStatus | null>(null);
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -52,17 +57,19 @@ export default function AdminPage() {
       // Each section is optional. A sub-admin holding only panel:nodes.read
       // gets the node list and no 403s for the three sections they cannot see,
       // so one missing permission does not blank the page.
-      const [nodeResult, auditResult, accountResult, requestResult] = await Promise.all([
+      const [nodeResult, auditResult, accountResult, requestResult, steamResult] = await Promise.all([
         api.get<{ nodes: NodeRow[] }>('/admin/nodes').catch(skipForbidden),
         api.get<{ entries: AuditRow[] }>('/admin/audit?limit=50').catch(skipForbidden),
         api.get<{ accounts: PanelAccountRow[] }>('/admin/panel-accounts').catch(skipForbidden),
         api.get<{ requests: AccessRequestRow[] }>('/admin/access-requests').catch(skipForbidden),
+        api.get<SteamCredentialStatus>('/admin/steam-credentials').catch(skipForbidden),
       ]);
 
       setNodes(nodeResult?.nodes ?? []);
       setAudit(auditResult?.entries ?? []);
       setAccounts(accountResult?.accounts ?? []);
       setRequests(requestResult?.requests ?? []);
+      setSteam(steamResult);
       setStepUpNeeded(false);
       setError(null);
     } catch (caught) {
@@ -176,6 +183,10 @@ export default function AdminPage() {
           onChanged={load}
           onError={report}
         />
+      ) : null}
+
+      {can('panel:settings') && steam ? (
+        <SteamCredentials status={steam} onChanged={load} onError={report} />
       ) : null}
 
       {can('panel:accounts.read') ? (

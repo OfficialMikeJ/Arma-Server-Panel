@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { GAMES, type ModEntry } from '@asp/shared';
 import type { Server } from '@prisma/client';
 import type { GameAdapter, ParsedLogEvent, QueryResult, ServerSecrets } from '../adapter.js';
-import { loadConfig } from '../../../config/env.js';
+import { getSteamCredentials } from '../../platform/steam-credentials.js';
 import { decryptSecretToString } from '../../../security/crypto.js';
 import { queryA2SInfo } from '../protocols/a2s.js';
 import { getGameHost } from '../../network/game-host.js';
@@ -384,8 +384,8 @@ export const arma3Adapter: GameAdapter = {
     return result.data;
   },
 
-  buildEnv(server) {
-    const config = loadConfig();
+  async buildEnv(server) {
+    const steam = await getSteamCredentials();
     return {
       ASP_SERVER_ID: server.id,
       ASP_GAME: 'arma3',
@@ -404,8 +404,7 @@ export const arma3Adapter: GameAdapter = {
       // Only set when configured; an empty value would make SteamCMD attempt
       // an anonymous login, which cannot fetch a paid title and fails with a
       // far less obvious error than "credentials missing".
-      ...(config.STEAM_USERNAME ? { STEAM_USERNAME: config.STEAM_USERNAME } : {}),
-      ...(config.STEAM_PASSWORD ? { STEAM_PASSWORD: config.STEAM_PASSWORD } : {}),
+      ...(steam ? { STEAM_USERNAME: steam.username, STEAM_PASSWORD: steam.password } : {}),
       LANG: 'C.UTF-8',
       TZ: 'UTC',
     };
