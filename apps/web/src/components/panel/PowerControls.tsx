@@ -67,9 +67,14 @@ export function PowerControls({
       setShowReinstall(false);
       setConfirmText('');
     } catch (caught) {
-      setError(
-        caught instanceof ApiError ? caught.message : 'That action could not be completed.',
-      );
+      if (caught instanceof ApiError) {
+        // Field-level detail matters most here: a rejected power action is
+        // usually a confirmation mismatch or a bad state transition.
+        const detail = caught.details?.[0];
+        setError(detail ? `${caught.message} (${detail.path}: ${detail.message})` : caught.message);
+      } else {
+        setError('That action could not be completed.');
+      }
     } finally {
       setPending(null);
     }

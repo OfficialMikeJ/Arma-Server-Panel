@@ -53,14 +53,29 @@ export default fp(async function errorHandler(app: FastifyInstance) {
     }
 
     if (error instanceof ZodError) {
+      const details = error.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      }));
+
+      // Name the offending field in the message itself. "The request payload
+      // is not valid" on its own gives an operator nothing to act on, and the
+      // details array is easy for a caller to drop.
+      const first = details[0];
+      const summary = first
+        ? first.path
+          ? `${first.path}: ${first.message}`
+          : first.message
+        : 'unknown field';
+      const more = details.length > 1 ? ` (and ${details.length - 1} more)` : '';
+
+      request.log.info({ details, requestId }, 'Validation failed');
+
       return reply.status(422).send({
         error: {
           code: 'validation_failed',
-          message: 'The request payload is not valid.',
-          details: error.issues.map((issue) => ({
-            path: issue.path.join('.'),
-            message: issue.message,
-          })),
+          message: `Invalid request — ${summary}${more}`,
+          details,
           requestId,
         },
       });
