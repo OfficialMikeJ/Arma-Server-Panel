@@ -93,6 +93,38 @@ interface Allocation {
 
 const allocations = new Map<string, Allocation>();
 const allocationsByPort = new Map<number, Allocation>();
+/**
+ * "address:port" of each live tunnel endpoint -> its allocation. The data plane
+ * resolves every non-auth packet through this, so it must stay a hash lookup:
+ * scanning the allocation list per packet would burn CPU proportional to the
+ * number of hosted servers on traffic that arrives thousands of times a second.
+ */
+const allocationsByTunnel = new Map<string, Allocation>();
+
+function endpointKey(address: string, port: number): string {
+  return `${address}:${port}`;
+}
+
+function setTunnelEndpoint(allocation: Allocation, address: string, port: number): void {
+  clearTunnelEndpoint(allocation);
+
+  // A source endpoint maps to exactly one allocation. If some other allocation
+  // still claims it, detach that one first so its stale entry cannot linger.
+  const key = endpointKey(address, port);
+  const previous = allocationsByTunnel.get(key);
+  if (previous && previous !== allocation) previous.tunnel = null;
+
+  allocation.tunnel = { address, port, lastSeen: Date.now() };
+  allocationsByTunnel.set(key, allocation);
+}
+
+function clearTunnelEndpoint(allocation: Allocation): void {
+  if (!allocation.tunnel) return;
+  const key = endpointKey(allocation.tunnel.address, allocation.tunnel.port);
+  // Only drop the index entry if it still points at this allocation.
+  if (allocationsByTunnel.get(key) === allocation) allocationsByTunnel.delete(key);
+  allocation.tunnel = null;
+}
 
 /* ------------------------------------------------------------------ */
 /* Packet framing                                                      */
@@ -196,13 +228,31 @@ async function createAllocation(body: {
     console.error(`[relay] allocation ${sessionToken.slice(0, 8)} socket error:`, error.message);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    socket.once('error', reject);
-    socket.bind(publicPort, () => resolve());
-  });
+  // Claim the port before yielding to the bind. Two allocation requests can be
+  // in flight at once, and both would otherwise pick the same free port - the
+  // second bind then fails with EADDRINUSE and leaks its socket.
+  allocationsByPort.set(publicPort, allocation);
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      socket.once('error', reject);
+      socket.bind(publicPort, () => resolve());
+    });
+  } catch (error) {
+    allocationsByPort.delete(publicPort);
+    try {
+      socket.close();
+    } catch {
+      // never bound
+    }
+    console.error(
+      `[relay] could not bind udp/${publicPort}:`,
+      error instanceof Error ? error.message : error,
+    );
+    return { ok: false, error: 'Could not bind the allocated port' };
+  }
 
   allocations.set(sessionToken, allocation);
-  allocationsByPort.set(publicPort, allocation);
 
   console.log(
     `[relay] allocated udp/${publicPort} for server ${body.serverId} (${body.portKey})`,
@@ -220,6 +270,7 @@ function releaseAllocation(sessionToken: string): boolean {
   } catch {
     // already closed
   }
+  clearTunnelEndpoint(allocation);
   allocations.delete(sessionToken);
   allocationsByPort.delete(allocation.publicPort);
 
@@ -378,7 +429,7 @@ dataSocket.on('message', (packet, rinfo) => {
       return;
     }
 
-    allocation.tunnel = { address: rinfo.address, port: rinfo.port, lastSeen: Date.now() };
+    setTunnelEndpoint(allocation, rinfo.address, rinfo.port);
     allocation.lastActivity = Date.now();
 
     dataSocket.send(buildHeader(4, 0, 0), rinfo.port, rinfo.address, () => undefined);
@@ -389,10 +440,7 @@ dataSocket.on('message', (packet, rinfo) => {
   }
 
   /* ---- Everything else must come from an authenticated tunnel ---- */
-  const allocation = [...allocations.values()].find(
-    (candidate) =>
-      candidate.tunnel?.address === rinfo.address && candidate.tunnel?.port === rinfo.port,
-  );
+  const allocation = allocationsByTunnel.get(endpointKey(rinfo.address, rinfo.port));
   if (!allocation?.tunnel) return;
 
   allocation.tunnel.lastSeen = Date.now();
@@ -426,7 +474,7 @@ setInterval(() => {
 
     if (allocation.tunnel && now - allocation.tunnel.lastSeen > TUNNEL_IDLE_MS) {
       console.log(`[relay] tunnel for udp/${allocation.publicPort} went silent`);
-      allocation.tunnel = null;
+      clearTunnelEndpoint(allocation);
     }
     // An allocation nobody has used in a long time is reclaimed so its public
     // port returns to the pool.

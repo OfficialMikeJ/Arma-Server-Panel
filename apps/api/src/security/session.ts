@@ -66,7 +66,27 @@ export interface ResolvedSession {
   account: Account;
   /** Set when the token was rotated; the caller must re-issue the cookie. */
   rotated: { token: string; csrfToken: string } | null;
+  /**
+   * The digest the *incoming* request's CSRF token must match.
+   *
+   * Not the same as `session.csrfTokenHash` when this request is the one that
+   * rotated the session - the browser is still holding the pre-rotation CSRF
+   * cookie, and checking it against the freshly written digest would reject
+   * every state-changing request that lands on a rotation boundary.
+   */
+  csrfTokenHash: string;
 }
+
+/**
+ * How long the pre-rotation token keeps working.
+ *
+ * The panel polls metrics every five seconds and holds a console socket open,
+ * so several requests are routinely in flight at once. All of them carry the
+ * old cookie until the rotating response comes back; without this window they
+ * would resolve to nothing and the operator would be signed out roughly every
+ * fifteen minutes.
+ */
+const ROTATION_GRACE_MS = 60_000;
 
 export interface SessionLookupResult {
   ok: boolean;
@@ -83,10 +103,25 @@ export async function resolveSession(
   }
 
   const tokenHash = sha256Hex(token);
-  const session = await prisma.session.findUnique({
+  let session = await prisma.session.findUnique({
     where: { tokenHash },
     include: { account: true },
   });
+
+  // Not the current token - it may still be the one this session rotated away
+  // from moments ago, held by a request that was already on the wire.
+  let viaGrace = false;
+  if (!session) {
+    session = await prisma.session.findFirst({
+      where: {
+        previousTokenHash: tokenHash,
+        previousTokenExpiresAt: { gt: new Date() },
+        revokedAt: null,
+      },
+      include: { account: true },
+    });
+    viaGrace = session !== null;
+  }
 
   if (!session) return { ok: false, reason: 'not_found' };
   if (session.revokedAt !== null) return { ok: false, reason: 'revoked' };
@@ -118,21 +153,55 @@ export async function resolveSession(
     return { ok: false, reason: 'account_unavailable' };
   }
 
+  // Whatever the request presented is what its CSRF token belongs to.
+  const csrfTokenHash =
+    viaGrace && session.previousCsrfTokenHash ? session.previousCsrfTokenHash : session.csrfTokenHash;
+
   let rotated: { token: string; csrfToken: string } | null = null;
   let current = session as Session;
 
-  if (now.getTime() - session.rotatedAt.getTime() > SESSION.rotateAfterMs) {
-    rotated = { token: generateToken(SESSION.tokenBytes), csrfToken: generateToken(32) };
-    current = await prisma.session.update({
-      where: { id: session.id },
+  const rotationDue =
+    !viaGrace && now.getTime() - session.rotatedAt.getTime() > SESSION.rotateAfterMs;
+
+  if (rotationDue) {
+    const candidate = { token: generateToken(SESSION.tokenBytes), csrfToken: generateToken(32) };
+
+    // Conditional on rotatedAt, so of several concurrent requests exactly one
+    // rotates. Without this they all would, each handing the browser a
+    // different cookie while the database kept only the last - and the next
+    // request would authenticate with a token that no longer exists.
+    const claimed = await prisma.session.updateMany({
+      where: { id: session.id, rotatedAt: session.rotatedAt, revokedAt: null },
       data: {
-        tokenHash: sha256Hex(rotated.token),
-        csrfTokenHash: sha256Hex(rotated.csrfToken),
+        tokenHash: sha256Hex(candidate.token),
+        csrfTokenHash: sha256Hex(candidate.csrfToken),
+        previousTokenHash: session.tokenHash,
+        previousCsrfTokenHash: session.csrfTokenHash,
+        previousTokenExpiresAt: new Date(now.getTime() + ROTATION_GRACE_MS),
         rotatedAt: now,
         lastSeenAt: now,
         ipHash: client.ipHash,
       },
     });
+
+    if (claimed.count === 1) {
+      rotated = candidate;
+      current = {
+        ...(session as Session),
+        tokenHash: sha256Hex(candidate.token),
+        csrfTokenHash: sha256Hex(candidate.csrfToken),
+        previousTokenHash: session.tokenHash,
+        previousCsrfTokenHash: session.csrfTokenHash,
+        previousTokenExpiresAt: new Date(now.getTime() + ROTATION_GRACE_MS),
+        rotatedAt: now,
+        lastSeenAt: now,
+        ipHash: client.ipHash,
+      };
+    } else {
+      // Another request won the race. Ours stays on the old cookie, which the
+      // grace window keeps valid, and issues no competing Set-Cookie.
+      current = { ...(session as Session), lastSeenAt: now };
+    }
   } else {
     current = await prisma.session.update({
       where: { id: session.id },
@@ -140,7 +209,7 @@ export async function resolveSession(
     });
   }
 
-  return { ok: true, resolved: { session: current, account, rotated } };
+  return { ok: true, resolved: { session: current, account, rotated, csrfTokenHash } };
 }
 
 /** Rotates the token in place. Called after any privilege change. */
@@ -157,6 +226,11 @@ export async function rotateSession(
     csrfTokenHash: sha256Hex(csrfToken),
     rotatedAt: now,
     lastSeenAt: now,
+    // A privilege change is not a routine rotation: the old token must stop
+    // working at once, so no grace window is left behind.
+    previousTokenHash: null,
+    previousCsrfTokenHash: null,
+    previousTokenExpiresAt: null,
   };
 
   if (options.elevated !== undefined) {

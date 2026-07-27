@@ -93,9 +93,10 @@ export default fp(async function authPlugin(app: FastifyInstance) {
 
     const { session, account, rotated } = result.resolved;
 
-    // Layer 3: double-submit token, checked against the *pre-rotation* digest.
+    // Layer 3: double-submit token, checked against the *pre-rotation* digest -
+    // the browser is still holding the cookie it sent with this request.
     if (!isSafeMethod(request.method)) {
-      const csrf = verifyCsrfToken(request, result.resolved.session.csrfTokenHash);
+      const csrf = verifyCsrfToken(request, result.resolved.csrfTokenHash);
       if (!csrf.ok) {
         throw new AppError(403, 'csrf_token_rejected', CSRF_FAILURE_MESSAGES[csrf.reason!]);
       }

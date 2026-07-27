@@ -50,6 +50,19 @@ export interface RelayTunnelResult {
   message: string;
 }
 
+/**
+ * One forwarding socket per player, not per packet.
+ *
+ * The game sees each player as a distinct source port, which is also what
+ * makes replies routable back to the right person. Allocating a socket per
+ * datagram - as this originally did - burns a file descriptor for every packet
+ * and exhausts them within seconds of real traffic.
+ */
+interface ClientChannel {
+  socket: Socket;
+  lastSeen: number;
+}
+
 interface ActiveTunnel {
   serverId: string;
   portKey: string;
@@ -58,8 +71,8 @@ interface ActiveTunnel {
   sessionToken: string;
   remotePort: number;
   localPort: number;
-  /** relay client id -> last activity, so stale entries can be dropped. */
-  clients: Map<number, number>;
+  /** relay client id -> its dedicated forwarding socket. */
+  clients: Map<number, ClientChannel>;
   sequence: number;
   closed: boolean;
 }
@@ -297,46 +310,43 @@ async function establishDataPlane(
     const payload = packet.subarray(HEADER_BYTES);
     if (payload.length === 0 || payload.length > MAX_DATAGRAM) return;
 
-    // Bound the client table so a spoofed flood cannot exhaust memory.
-    if (!tunnel.clients.has(header.clientId) && tunnel.clients.size >= MAX_CLIENTS) {
-      pruneClients(tunnel);
-      if (tunnel.clients.size >= MAX_CLIENTS) return;
+    let channel = tunnel.clients.get(header.clientId);
+
+    if (!channel) {
+      // Bound the client table so a spoofed flood cannot exhaust memory or
+      // descriptors.
+      if (tunnel.clients.size >= MAX_CLIENTS) {
+        pruneClients(tunnel);
+        if (tunnel.clients.size >= MAX_CLIENTS) return;
+      }
+
+      const forwarder = createSocket('udp4');
+      channel = { socket: forwarder, lastSeen: Date.now() };
+      tunnel.clients.set(header.clientId, channel);
+
+      // Replies from the game arrive on this player's own socket for as long
+      // as they are connected - wrap each one and send it back up the tunnel.
+      forwarder.on('message', (reply) => {
+        if (tunnel.closed || reply.length > MAX_DATAGRAM) return;
+        const current = tunnel.clients.get(header.clientId);
+        if (current) current.lastSeen = Date.now();
+
+        socket.send(
+          Buffer.concat([buildHeader(1, header.clientId, tunnel.sequence++ >>> 0), reply]),
+          allocation.dataPort,
+          allocation.dataHost,
+          () => undefined,
+        );
+      });
+
+      forwarder.on('error', () => {
+        closeChannel(tunnel, header.clientId);
+      });
     }
-    tunnel.clients.set(header.clientId, Date.now());
 
-    const forwarder = createSocket('udp4');
-    forwarder.send(payload, tunnel.localPort, '127.0.0.1', (error) => {
-      if (error) {
-        forwarder.close();
-        return;
-      }
-    });
-
-    // The game's reply comes back on this ephemeral socket; wrap and return it.
-    const replyTimer = setTimeout(() => {
-      try {
-        forwarder.close();
-      } catch {
-        // already closed
-      }
-    }, 8000);
-    replyTimer.unref();
-
-    forwarder.on('message', (reply) => {
-      if (tunnel.closed || reply.length > MAX_DATAGRAM) return;
-      const wrapped = Buffer.concat([
-        buildHeader(1, header.clientId, tunnel.sequence++ >>> 0),
-        reply,
-      ]);
-      socket.send(wrapped, allocation.dataPort, allocation.dataHost, () => undefined);
-    });
-    forwarder.on('error', () => {
-      clearTimeout(replyTimer);
-      try {
-        forwarder.close();
-      } catch {
-        // already closed
-      }
+    channel.lastSeen = Date.now();
+    channel.socket.send(payload, tunnel.localPort, '127.0.0.1', (error) => {
+      if (error) closeChannel(tunnel, header.clientId);
     });
   });
 
@@ -359,10 +369,23 @@ async function establishDataPlane(
   return tunnel;
 }
 
+/** Closes one player's socket and forgets them. */
+function closeChannel(tunnel: ActiveTunnel, clientId: number): void {
+  const channel = tunnel.clients.get(clientId);
+  if (!channel) return;
+  tunnel.clients.delete(clientId);
+  try {
+    channel.socket.close();
+  } catch {
+    // already closed
+  }
+}
+
+/** Reclaims sockets for players who have stopped sending. */
 function pruneClients(tunnel: ActiveTunnel): void {
   const cutoff = Date.now() - CLIENT_IDLE_MS;
-  for (const [clientId, lastSeen] of tunnel.clients) {
-    if (lastSeen < cutoff) tunnel.clients.delete(clientId);
+  for (const [clientId, channel] of tunnel.clients) {
+    if (channel.lastSeen < cutoff) closeChannel(tunnel, clientId);
   }
 }
 
@@ -373,6 +396,10 @@ export async function closeRelayTunnel(serverId: string, portKey: string): Promi
 
   tunnel.closed = true;
   clearInterval(tunnel.keepalive);
+
+  // Every player's socket has to go too, or closing a tunnel leaks all of them.
+  for (const clientId of [...tunnel.clients.keys()]) closeChannel(tunnel, clientId);
+
   try {
     tunnel.socket.close();
   } catch {

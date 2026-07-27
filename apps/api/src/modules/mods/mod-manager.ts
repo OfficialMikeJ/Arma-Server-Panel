@@ -78,6 +78,18 @@ export async function setServerMods(
     .sort((a, b) => a.order - b.order)
     .map((mod, index) => ({ ...mod, order: index }));
 
+  // The list is rewritten wholesale, and callers such as toggleMod cannot
+  // supply sizeBytes - it comes from the Workshop lookup. Carry the cached
+  // value across so flipping a checkbox does not blank every mod's size.
+  const existingSizes = new Map(
+    (
+      await prisma.serverMod.findMany({
+        where: { serverId },
+        select: { modId: true, sizeBytes: true },
+      })
+    ).map((row) => [row.modId, row.sizeBytes]),
+  );
+
   await prisma.$transaction(async (tx) => {
     await tx.serverMod.deleteMany({ where: { serverId } });
     if (ordered.length > 0) {
@@ -90,6 +102,7 @@ export async function setServerMods(
           enabled: mod.enabled,
           order: mod.order,
           required: mod.required,
+          sizeBytes: existingSizes.get(mod.modId) ?? null,
         })),
       });
     }

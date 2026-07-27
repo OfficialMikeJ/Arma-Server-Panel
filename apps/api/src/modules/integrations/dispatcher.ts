@@ -59,6 +59,13 @@ const EVENT_PRESENTATION: Record<
   alert: { title: 'Alert', color: 0xff6a00, priority: 1 },
 };
 
+/**
+ * Fans an event out to a server's destinations.
+ *
+ * Never rejects. Callers include the supervisor's crash and reconcile paths -
+ * some await it, some fire it off - and a webhook nobody controls must not be
+ * able to fail either of those.
+ */
 export async function dispatchEvent(
   serverId: string,
   event: IntegrationEvent,
@@ -68,38 +75,47 @@ export async function dispatchEvent(
     .findMany({ where: { serverId, enabled: true } })
     .catch(() => []);
 
-  for (const integration of integrations) {
-    if (!integration.events.includes(event)) continue;
+  const due = integrations.filter((integration) => integration.events.includes(event));
+  if (due.length === 0) return;
 
-    try {
-      await send(integration.kind, integration.secretsEnc, event, context);
-      await prisma.integration.update({
-        where: { id: integration.id },
-        data: { lastSentAt: new Date(), failureCount: 0 },
-      });
-    } catch (error) {
-      logger.warn(
-        { err: error, integrationId: integration.id, kind: integration.kind },
-        'Integration delivery failed',
-      );
-
-      const updated = await prisma.integration.update({
-        where: { id: integration.id },
-        data: { failureCount: { increment: 1 } },
-        select: { failureCount: true },
-      });
-
-      // A destination that keeps failing is disabled rather than retried
-      // forever - a dead webhook should not slow every event dispatch.
-      if (updated.failureCount >= 10) {
+  // Concurrent, not sequential: each send has an 8 second timeout, and the
+  // supervisor awaits this call, so three dead webhooks used to stall the
+  // reconcile loop for the better part of half a minute.
+  await Promise.allSettled(
+    due.map(async (integration) => {
+      try {
+        await send(integration.kind, integration.secretsEnc, event, context);
         await prisma.integration.update({
           where: { id: integration.id },
-          data: { enabled: false },
+          data: { lastSentAt: new Date(), failureCount: 0 },
         });
-        logger.warn({ integrationId: integration.id }, 'Integration disabled after repeated failures');
+      } catch (error) {
+        logger.warn(
+          { err: error, integrationId: integration.id, kind: integration.kind },
+          'Integration delivery failed',
+        );
+
+        const updated = await prisma.integration.update({
+          where: { id: integration.id },
+          data: { failureCount: { increment: 1 } },
+          select: { failureCount: true },
+        });
+
+        // A destination that keeps failing is disabled rather than retried
+        // forever - a dead webhook should not slow every event dispatch.
+        if (updated.failureCount >= 10) {
+          await prisma.integration.update({
+            where: { id: integration.id },
+            data: { enabled: false },
+          });
+          logger.warn(
+            { integrationId: integration.id },
+            'Integration disabled after repeated failures',
+          );
+        }
       }
-    }
-  }
+    }),
+  );
 }
 
 async function send(

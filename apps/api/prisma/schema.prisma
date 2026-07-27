@@ -140,6 +140,13 @@ model Session {
   /// Bound to the CSRF cookie value for double-submit verification.
   csrfTokenHash  String
 
+  /// The digests this session had immediately before its last rotation.
+  /// Honoured for a few seconds afterwards so requests that were already in
+  /// flight with the old cookie are not treated as forged and logged out.
+  previousTokenHash      String?
+  previousCsrfTokenHash  String?
+  previousTokenExpiresAt DateTime?
+
   /// Truncated + salted client fingerprint. Not reversible to an IP address.
   ipHash         String
   userAgentHash  String
@@ -157,6 +164,7 @@ model Session {
 
   @@index([accountId])
   @@index([absoluteExpiresAt])
+  @@index([previousTokenHash])
   @@map("sessions")
 }
 

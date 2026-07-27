@@ -434,13 +434,28 @@ export async function renewExpiringMappings(): Promise<number> {
       logger.warn({ err: error, allocationId: allocation.id }, 'Lease renewal failed');
     }
 
+    // A failed renewal used to clear leaseExpiresAt, which took the row out of
+    // this query's `leaseExpiresAt: not null` filter for good - one blip from a
+    // busy router silently closed the port until someone re-opened it by hand.
+    // Keep the real expiry instead, so the sweep retries every five minutes for
+    // whatever is left of the lease, and only give up once it has truly lapsed.
+    const stillLive = (allocation.leaseExpiresAt?.getTime() ?? 0) > Date.now();
+
     await prisma.portAllocation.update({
       where: { id: allocation.id },
       data: {
-        active: ok,
-        leaseExpiresAt: ok ? new Date(Date.now() + 3600 * 1000) : null,
+        active: ok || stillLive,
+        leaseExpiresAt: ok
+          ? new Date(Date.now() + 3600 * 1000)
+          : stillLive
+            ? allocation.leaseExpiresAt
+            : null,
         lastVerifiedAt: new Date(),
-        message: ok ? 'Lease renewed' : 'Lease renewal failed - the server may be unreachable',
+        message: ok
+          ? 'Lease renewed'
+          : stillLive
+            ? 'Lease renewal failed - retrying before it expires'
+            : 'Lease expired and could not be renewed - the port is closed',
       },
     });
 

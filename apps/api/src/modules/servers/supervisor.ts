@@ -42,6 +42,12 @@ class ServerSupervisor {
   private reconcileTimer: NodeJS.Timeout | null = null;
   private running = false;
 
+  // Re-entrancy guards: a tick is skipped rather than queued, because the next
+  // one will pick up the same work anyway.
+  private samplingBusy = false;
+  private flushBusy = false;
+  private reconcileBusy = false;
+
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -50,22 +56,37 @@ class ServerSupervisor {
       logger.error({ err: error }, 'Initial supervisor reconcile failed');
     });
 
+    // Each loop talks to Docker once per server, so a busy node or a slow
+    // daemon can easily take longer than the interval. Without these guards the
+    // runs overlap, duplicating metric samples and racing the log attachment.
     this.statsTimer = setInterval(() => {
-      void this.sampleAll().catch((error) =>
-        logger.error({ err: error }, 'Stats sampling failed'),
-      );
+      if (this.samplingBusy) return;
+      this.samplingBusy = true;
+      void this.sampleAll()
+        .catch((error) => logger.error({ err: error }, 'Stats sampling failed'))
+        .finally(() => {
+          this.samplingBusy = false;
+        });
     }, METRICS.sampleIntervalMs);
 
     this.persistTimer = setInterval(() => {
-      void this.flushConsole().catch((error) =>
-        logger.error({ err: error }, 'Console persistence failed'),
-      );
+      if (this.flushBusy) return;
+      this.flushBusy = true;
+      void this.flushConsole()
+        .catch((error) => logger.error({ err: error }, 'Console persistence failed'))
+        .finally(() => {
+          this.flushBusy = false;
+        });
     }, 5_000);
 
     this.reconcileTimer = setInterval(() => {
-      void this.reconcile().catch((error) =>
-        logger.error({ err: error }, 'Supervisor reconcile failed'),
-      );
+      if (this.reconcileBusy) return;
+      this.reconcileBusy = true;
+      void this.reconcile()
+        .catch((error) => logger.error({ err: error }, 'Supervisor reconcile failed'))
+        .finally(() => {
+          this.reconcileBusy = false;
+        });
     }, 30_000);
 
     this.statsTimer.unref();

@@ -237,45 +237,61 @@ export async function createServer(
     serverId,
   });
 
-  const server = await prisma.server.create({
-    data: {
-      id: serverId,
-      name: input.name,
-      game: GAME_TITLE_BY_ID[input.game],
-      state: 'CREATING',
-      ownerId: actor.accountId,
-      nodeId: node.id,
-      containerName,
-      volumePath,
-      cpuCores: input.resources.cpuCores,
-      cpuSet: input.resources.cpuSet,
-      memoryMib: input.resources.memoryMib,
-      storageGib: input.resources.storageGib,
-      bandwidthMbps: input.resources.bandwidthMbps,
-      transferQuotaGib: input.resources.transferQuotaGib,
-      slots: input.resources.slots,
-      basePort: ports.basePort,
-      publicHost: node.relayEnabled && input.useRelay ? node.relayEndpoint ?? node.publicHost : node.publicHost,
-      publicBasePort: ports.basePort,
-      useRelay: input.useRelay && node.relayEnabled,
-      autoPortForward: input.autoPortForward,
-      config: getAdapter(input.game).defaultConfig({
+  // From here on the allocation is committed. If anything below fails, those
+  // rows would sit with serverId null forever - releasePorts only matches on
+  // serverId - and the node would slowly run out of ports.
+  let server;
+  try {
+    server = await prisma.server.create({
+      data: {
+        id: serverId,
         name: input.name,
+        game: GAME_TITLE_BY_ID[input.game],
+        state: 'CREATING',
+        ownerId: actor.accountId,
+        nodeId: node.id,
+        containerName,
+        volumePath,
+        cpuCores: input.resources.cpuCores,
+        cpuSet: input.resources.cpuSet,
+        memoryMib: input.resources.memoryMib,
+        storageGib: input.resources.storageGib,
+        bandwidthMbps: input.resources.bandwidthMbps,
+        transferQuotaGib: input.resources.transferQuotaGib,
         slots: input.resources.slots,
-      }) as unknown as Prisma.InputJsonValue,
-      secretsEnc: encryptSecret(JSON.stringify(secrets), 'server-secrets'),
-      members: {
-        create: { accountId: actor.accountId, role: 'OWNER' },
+        basePort: ports.basePort,
+        publicHost:
+          node.relayEnabled && input.useRelay ? node.relayEndpoint ?? node.publicHost : node.publicHost,
+        publicBasePort: ports.basePort,
+        useRelay: input.useRelay && node.relayEnabled,
+        autoPortForward: input.autoPortForward,
+        config: getAdapter(input.game).defaultConfig({
+          name: input.name,
+          slots: input.resources.slots,
+        }) as unknown as Prisma.InputJsonValue,
+        secretsEnc: encryptSecret(JSON.stringify(secrets), 'server-secrets'),
+        members: {
+          create: { accountId: actor.accountId, role: 'OWNER' },
+        },
       },
-    },
-  });
+    });
 
-  await prisma.portAllocation.updateMany({
-    where: { id: { in: ports.allocationIds } },
-    data: { serverId: server.id },
-  });
+    await prisma.portAllocation.updateMany({
+      where: { id: { in: ports.allocationIds } },
+      data: { serverId: server.id },
+    });
 
-  await mkdir(volumePath, { recursive: true, mode: 0o750 });
+    await mkdir(volumePath, { recursive: true, mode: 0o750 });
+  } catch (error) {
+    // Hand the ports back before rethrowing, so a failed create does not
+    // permanently consume a block from the node's range.
+    await prisma.portAllocation
+      .deleteMany({ where: { id: { in: ports.allocationIds } } })
+      .catch(() => undefined);
+
+    logger.error({ err: error, serverId }, 'Server creation failed; released its port block');
+    throw error;
+  }
 
   await audit({
     accountId: actor.accountId,

@@ -41,6 +41,15 @@ const STREAM_COLOUR: Record<string, string> = {
   panel: 'text-brand-400',
 };
 
+/** Removes every handler so a socket we are discarding cannot call back. */
+function detach(socket: WebSocket | null): void {
+  if (!socket) return;
+  socket.onopen = null;
+  socket.onmessage = null;
+  socket.onerror = null;
+  socket.onclose = null;
+}
+
 export function ServerConsole({ serverId, canWrite }: Props) {
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [socketState, setSocketState] = useState<SocketState>('connecting');
@@ -68,7 +77,11 @@ export function ServerConsole({ serverId, canWrite }: Props) {
 
   /* ---- Connection, with exponential backoff ---- */
   const connect = useCallback(() => {
-    if (socketRef.current) socketRef.current.close();
+    // Detach before closing. `close()` still fires onclose, and that handler
+    // schedules a reconnect - so a deliberate close would otherwise spawn a
+    // socket we never asked for, and on unmount that loop runs forever.
+    detach(socketRef.current);
+    socketRef.current?.close();
 
     setSocketState('connecting');
     const socket = new WebSocket(consoleSocketUrl(serverId));
@@ -136,6 +149,8 @@ export function ServerConsole({ serverId, canWrite }: Props) {
     connect();
     return () => {
       if (reconnectRef.current) clearTimeout(reconnectRef.current);
+      reconnectRef.current = null;
+      detach(socketRef.current);
       socketRef.current?.close();
       socketRef.current = null;
     };
