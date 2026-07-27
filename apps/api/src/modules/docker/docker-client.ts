@@ -65,6 +65,19 @@ export interface DockerHealth {
   message: string | null;
 }
 
+/**
+ * Last reported state of each daemon-level condition worth warning about.
+ *
+ * This function backs `/health`, which anything from a reverse proxy to a
+ * monitoring agent will poll every few seconds. Warning on each call buried the
+ * log in one repeated line - and these are properties of how dockerd was
+ * started, so they cannot change without a restart that would restart the API
+ * with it. Logged on transition instead: once at boot, and again only if the
+ * answer actually changes.
+ */
+let lastUserNsRemap: boolean | null = null;
+let dockerWasReachable: boolean | null = null;
+
 export async function checkDockerHealth(): Promise<DockerHealth> {
   try {
     const docker = await getDocker();
@@ -73,11 +86,19 @@ export async function checkDockerHealth(): Promise<DockerHealth> {
     const securityOptions: string[] = (info as { SecurityOptions?: string[] }).SecurityOptions ?? [];
     const userNsRemap = securityOptions.some((option) => option.includes('userns'));
 
-    if (!userNsRemap) {
+    if (!userNsRemap && lastUserNsRemap !== false) {
       logger.warn(
         'Docker user-namespace remapping is not enabled. Enable it (dockerd --userns-remap=default) so a container escape does not land on host root.',
       );
+    } else if (userNsRemap && lastUserNsRemap === false) {
+      logger.info('Docker user-namespace remapping is now enabled.');
     }
+    lastUserNsRemap = userNsRemap;
+
+    if (dockerWasReachable === false) {
+      logger.info('Docker is reachable again.');
+    }
+    dockerWasReachable = true;
 
     return {
       available: true,
@@ -88,9 +109,22 @@ export async function checkDockerHealth(): Promise<DockerHealth> {
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ err: error }, 'Docker is not reachable');
+
+    // Same treatment: a health probe against a daemon that is down should say
+    // so once, not once per poll for as long as it stays down.
+    if (dockerWasReachable !== false) {
+      logger.error({ err: error }, 'Docker is not reachable');
+    }
+    dockerWasReachable = false;
+
     return { available: false, version: null, apiVersion: null, userNsRemap: false, message };
   }
+}
+
+/** Test/ops helper: forget what has already been reported. */
+export function resetDockerHealthReporting(): void {
+  lastUserNsRemap = null;
+  dockerWasReachable = null;
 }
 
 export async function requireDocker(): Promise<Docker> {
