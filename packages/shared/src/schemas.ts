@@ -198,6 +198,14 @@ export const createServerSchema = z.object({
   autoPortForward: z.boolean().default(true),
   /** Route public traffic through a relay so the host IP is never revealed. */
   useRelay: z.boolean().default(false),
+  /**
+   * Game settings to apply on top of the defaults.
+   *
+   * Optional, and merged rather than replacing: the adapter still fills in
+   * every key it needs. Validated by that adapter's own schema, so nothing here
+   * bypasses the checks a later edit would go through.
+   */
+  config: z.record(z.unknown()).optional(),
 });
 
 export const updateServerSchema = z.object({

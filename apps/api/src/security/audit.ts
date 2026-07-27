@@ -172,8 +172,18 @@ export const AuditAction = {
   MemberAdded: 'server.member.added',
   MemberRemoved: 'server.member.removed',
   MemberRoleChanged: 'server.member.role_changed',
+  MemberPermissionsChanged: 'server.member.permissions_changed',
   BackupCreated: 'server.backup.created',
   BackupRestored: 'server.backup.restored',
+
+  // panel administration and access requests
+  SubAdminCreated: 'panel.subadmin.created',
+  SubAdminUpdated: 'panel.subadmin.updated',
+  AccessRequested: 'panel.access.requested',
+  AccessRequestApproved: 'panel.access.approved',
+  AccessRequestDenied: 'panel.access.denied',
+  NodeCreated: 'panel.node.created',
+  NodeUpdated: 'panel.node.updated',
 
   // networking
   PortMappingCreated: 'network.port.mapped',

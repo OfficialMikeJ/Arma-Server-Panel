@@ -19,6 +19,8 @@ import {
   registerCompleteSchema,
   registerStartSchema,
   usernameSchema,
+  panelPermissionsFor,
+  isPanelAdministrator,
 } from '@asp/shared';
 import { z } from 'zod';
 
@@ -535,12 +537,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     await resetRateLimit(buildKey('login-verify', client.ipHash.slice(0, 32)));
 
     const issued = await createSession(account, client, {
-      elevated: account.type === 'ADMIN',
+      elevated: isPanelAdministrator(account),
     });
     setSessionCookies(
       reply,
       { token: issued.token, csrfToken: issued.csrfToken },
-      account.type === 'ADMIN',
+      isPanelAdministrator(account),
     );
 
     // Only offered after a real second factor. A recovery code is a sign that
@@ -813,6 +815,7 @@ export function publicAccount(account: {
   discordAvatar: string | null;
   isPlatformOwner: boolean;
   totpVerified: boolean;
+  panelPermissions?: string[];
   createdAt: Date;
 }) {
   return {
@@ -822,6 +825,10 @@ export function publicAccount(account: {
     status: account.status,
     isPlatformOwner: account.isPlatformOwner,
     totpVerified: account.totpVerified,
+    // Resolved, not the raw column: a full administrator holds everything
+    // without anything being stored, so the client can treat one list as the
+    // answer to "what may I do to the panel".
+    panelPermissions: [...panelPermissionsFor(account)],
     discord: account.discordId
       ? { id: account.discordId, username: account.discordUsername, avatar: account.discordAvatar }
       : null,

@@ -232,6 +232,15 @@ export async function createServer(
     battleyeRconPassword: generateToken(24),
   };
 
+  // Settings chosen on the create screen are merged over the game's defaults
+  // and validated by that game's own schema, so nothing gets in here that a
+  // later edit would have rejected.
+  const adapter = getAdapter(input.game);
+  const defaults = adapter.defaultConfig({ name: input.name, slots: input.resources.slots });
+  const initialConfig = input.config
+    ? adapter.validateConfig(input.config, defaults as Record<string, unknown>)
+    : defaults;
+
   const ports = await allocatePorts({
     nodeId: node.id,
     gameId: input.game,
@@ -266,10 +275,7 @@ export async function createServer(
         publicBasePort: ports.basePort,
         useRelay: input.useRelay && node.relayEnabled,
         autoPortForward: input.autoPortForward,
-        config: getAdapter(input.game).defaultConfig({
-          name: input.name,
-          slots: input.resources.slots,
-        }) as unknown as Prisma.InputJsonValue,
+        config: initialConfig as unknown as Prisma.InputJsonValue,
         secretsEnc: encryptSecret(JSON.stringify(secrets), 'server-secrets'),
         members: {
           create: { accountId: actor.accountId, role: 'OWNER' },

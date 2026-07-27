@@ -26,7 +26,12 @@ datasource db {
 
 enum AccountType {
   USER
+  /// Full platform administration, and implicit admin on every server.
   ADMIN
+  /// Panel administration only, scoped by panelPermissions. Never granted
+  /// implicit access to a game server - a sub-admin who needs one must be added
+  /// to it as a member like anybody else.
+  SUB_ADMIN
 }
 
 enum AccountStatus {
@@ -67,6 +72,10 @@ model Account {
   discordRefreshEnc Bytes?
 
   isPlatformOwner   Boolean       @default(false)
+  /// Panel-scoped grants for a SUB_ADMIN. Empty means no panel access at all,
+  /// so a sub-admin created without permissions can do nothing until granted
+  /// some. Ignored for ADMIN and the platform owner, who hold everything.
+  panelPermissions  String[]      @default([])
 
   failedAuthCount   Int           @default(0)
   lastFailedAuthAt  DateTime?
@@ -88,6 +97,8 @@ model Account {
   auditEntries      AuditLog[]
   aiProviders       AiProvider[]
   notifications     Notification[]
+  accessRequests    AccessRequest[] @relation("RequestedBy")
+  decidedRequests   AccessRequest[] @relation("DecidedBy")
 
   @@index([status])
   @@index([discordId])
@@ -414,6 +425,7 @@ model Server {
   deletedAt      DateTime?
 
   members        ServerMember[]
+  accessRequests AccessRequest[]
   mods           ServerMod[]
   ports          PortAllocation[]
   metrics        MetricSample[]
@@ -538,6 +550,54 @@ model PortAllocation {
   @@index([serverId])
   @@index([leaseExpiresAt])
   @@map("port_allocations")
+}
+
+/* ------------------------------------------------------------------ */
+/* Access requests                                                     */
+/* ------------------------------------------------------------------ */
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  DENIED
+  WITHDRAWN
+}
+
+/// A request to be granted permissions the requester does not hold.
+///
+/// Sub-users and sub-admins cannot widen their own access - that is the whole
+/// point of the split - so they ask, and an administrator decides. The record
+/// outlives the decision so there is a trail of who asked for what, and who
+/// agreed to it.
+model AccessRequest {
+  id           String              @id @default(cuid())
+
+  accountId    String
+  account      Account             @relation("RequestedBy", fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// Null for a panel-scoped request; set for a request against one server.
+  serverId     String?
+  server       Server?             @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  /// Permissions asked for. Validated against the vocabulary for the scope.
+  requested    String[]            @default([])
+  /// Why, in the requester's own words. Shown to whoever decides.
+  reason       String
+
+  status       AccessRequestStatus @default(PENDING)
+  decidedById  String?
+  decidedBy    Account?            @relation("DecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
+  /// Optional note from the decider, shown back to the requester.
+  decisionNote String?
+
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([accountId])
+  @@index([serverId])
+  @@index([status])
+  @@map("access_requests")
 }
 
 /* ------------------------------------------------------------------ */

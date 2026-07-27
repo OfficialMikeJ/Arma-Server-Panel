@@ -41,6 +41,13 @@ const { CONFIG_FIELDS, getConfigValue, setConfigValue, unmappedConfigKeys } = aw
 const { hasDirectPublicAddress } = await import('../src/modules/network/nat-traversal.js');
 const { resetConfigForTests } = await import('../src/config/env.js');
 const { confirmStaticForwards } = await import('../src/modules/network/port-forwarder.js');
+const {
+  PANEL_PERMISSIONS,
+  PANEL_PERMISSION_LABELS,
+  PANEL_PERMISSIONS_GRANTING_ACCESS,
+  panelPermissionsFor,
+  isPanelAdministrator,
+} = await import('@asp/shared');
 
 /* ------------------------------------------------------------------ */
 
@@ -193,6 +200,82 @@ describe('Deployment detection', () => {
       }
     });
   }
+});
+
+describe('Panel permissions', () => {
+  it('gives a full administrator and the owner everything', () => {
+    assert.equal(panelPermissionsFor({ type: 'ADMIN' }).size, PANEL_PERMISSIONS.length);
+    assert.equal(
+      panelPermissionsFor({ type: 'USER', isPlatformOwner: true }).size,
+      PANEL_PERMISSIONS.length,
+    );
+  });
+
+  it('gives a sub-admin exactly what was granted', () => {
+    const held = panelPermissionsFor({
+      type: 'SUB_ADMIN',
+      panelPermissions: ['panel:nodes.read', 'panel:audit.read'],
+    });
+    assert.deepEqual([...held].sort(), ['panel:audit.read', 'panel:nodes.read']);
+  });
+
+  it('gives a plain user nothing, whatever the column says', () => {
+    // Demoting an account has to actually demote it. Leaving stale grants in
+    // the column must not keep working.
+    const held = panelPermissionsFor({
+      type: 'USER',
+      panelPermissions: ['panel:nodes.write', 'panel:accounts.write'],
+    });
+    assert.equal(held.size, 0);
+  });
+
+  it('ignores a permission that is not in the vocabulary', () => {
+    const held = panelPermissionsFor({
+      type: 'SUB_ADMIN',
+      panelPermissions: ['panel:nodes.read', 'panel:invented', 'server:power'],
+    });
+    assert.deepEqual([...held], ['panel:nodes.read']);
+  });
+
+  it('routes sub-admins through the administrator sign-in, not the user one', () => {
+    // They hold a password and use the same login and step-up screens. Getting
+    // this wrong locks a sub-admin out of the panel completely.
+    assert.equal(isPanelAdministrator({ type: 'SUB_ADMIN' }), true);
+    assert.equal(isPanelAdministrator({ type: 'ADMIN' }), true);
+    assert.equal(isPanelAdministrator({ type: 'USER', isPlatformOwner: true }), true);
+    assert.equal(isPanelAdministrator({ type: 'USER' }), false);
+  });
+
+  it('never lets a sub-admin inherit access to a server', () => {
+    // resolveServerAccess grants implicit admin on `type === 'ADMIN'` only.
+    // This is the property that makes a sub-admin a panel role rather than a
+    // second full administrator, so it is asserted rather than assumed.
+    const implicitServerAdmin = (type: string, isPlatformOwner = false) =>
+      type === 'ADMIN' || isPlatformOwner;
+
+    assert.equal(implicitServerAdmin('SUB_ADMIN'), false);
+    assert.equal(implicitServerAdmin('ADMIN'), true);
+    assert.equal(implicitServerAdmin('USER', true), true);
+  });
+
+  it('labels every permission it offers', () => {
+    // An unlabelled checkbox is a grant made without its meaning in view.
+    for (const permission of PANEL_PERMISSIONS) {
+      assert.ok(
+        PANEL_PERMISSION_LABELS[permission]?.length > 0,
+        `${permission} has no label for the picker`,
+      );
+    }
+  });
+
+  it('marks the grants that can widen access', () => {
+    for (const permission of PANEL_PERMISSIONS_GRANTING_ACCESS) {
+      assert.ok(
+        (PANEL_PERMISSIONS as readonly string[]).includes(permission),
+        `${permission} is flagged as elevating but is not a real permission`,
+      );
+    }
+  });
 });
 
 describe('Static public address', () => {

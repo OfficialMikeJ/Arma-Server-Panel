@@ -8,7 +8,13 @@ import { api, ApiError } from '@/lib/api';
 
 interface SessionResponse {
   authenticated: boolean;
-  account?: { id: string; username: string; type: string; isPlatformOwner: boolean };
+  account?: {
+    id: string;
+    username: string;
+    type: string;
+    isPlatformOwner: boolean;
+    panelPermissions?: string[];
+  };
   mustChangePassword?: boolean;
   totpVerified?: boolean;
 }
@@ -124,7 +130,9 @@ export default function PanelLayout({ children }: { children: React.ReactNode })
           </div>
 
           <div className="flex items-center gap-3">
-            {session.account?.type === 'ADMIN' ? (
+            {/* Shown whenever the account holds any panel permission, so a
+                sub-admin can reach the sections they were granted. */}
+            {(session.account?.panelPermissions?.length ?? 0) > 0 ? (
               <Link
                 href="/panel/admin"
                 className="badge border border-brand-500/40 bg-brand-500/10 text-brand-400"

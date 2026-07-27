@@ -6,12 +6,14 @@ import Link from 'next/link';
 import {
   GAMES,
   GAME_IDS,
+  CONFIG_FIELDS,
   RESOURCE_LIMITS,
   formatMemory,
   formatStorage,
   type GameId,
 } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
+import { ConfigForm } from '@/components/panel/ConfigForm';
 
 /**
  * Create a server.
@@ -53,6 +55,10 @@ export default function NewServerPage() {
   const [slots, setSlots] = useState(RESOURCE_LIMITS.slots.default);
   const [autoPortForward, setAutoPortForward] = useState(true);
   const [useRelay, setUseRelay] = useState(false);
+  // Settings chosen here are merged over the game's defaults on the server, so
+  // an empty object is the same as not touching this section at all.
+  const [config, setConfig] = useState<Record<string, unknown>>({});
+  const [showConfig, setShowConfig] = useState(false);
 
   useEffect(() => {
     api
@@ -91,6 +97,7 @@ export default function NewServerPage() {
         },
         autoPortForward,
         useRelay,
+        ...(Object.keys(config).length > 0 ? { config } : {}),
       });
       router.push(`/panel/servers/${result.server.id}`);
     } catch (caught) {
@@ -171,6 +178,8 @@ export default function NewServerPage() {
                     onClick={() => {
                       setGame(id);
                       setSlots(Math.min(slots, candidate.maxSlots));
+                      // The settings belong to the game they were chosen for.
+                      setConfig({});
                     }}
                     className={`rounded-lg border p-3 text-left transition-colors ${
                       game === id
@@ -323,6 +332,38 @@ export default function NewServerPage() {
             </p>
           ) : null}
         </section>
+
+        {CONFIG_FIELDS[game].length > 0 ? (
+          <div className="rounded-lg border border-ink-400 p-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between text-left"
+              onClick={() => setShowConfig((v) => !v)}
+            >
+              <span className="text-sm font-bold">Game settings</span>
+              <span className="text-xs text-ink-700">
+                {showConfig ? 'Hide' : 'Optional — sensible defaults are used'}
+              </span>
+            </button>
+
+            {showConfig ? (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs leading-relaxed text-ink-700">
+                  Anything left alone uses {definition.name}&apos;s default. Every one of these can
+                  also be changed later under Settings, so nothing here is a decision you are stuck
+                  with.
+                </p>
+                <ConfigForm
+                  fields={CONFIG_FIELDS[game]}
+                  config={config}
+                  onChange={setConfig}
+                  invalidPaths={details.map((detail) => detail.path)}
+                  disabled={busy}
+                />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <button type="submit" className="btn-primary w-full" disabled={busy || name.length < 3}>
           {busy ? 'Creating…' : 'Create server'}

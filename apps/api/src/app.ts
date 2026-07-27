@@ -19,6 +19,7 @@ import { registerAdminAuthRoutes } from './routes/admin-auth.js';
 import { registerSetupRoutes } from './routes/setup.js';
 import { registerAccountRoutes } from './routes/account.js';
 import { registerNodeRoutes } from './routes/nodes.js';
+import { registerPanelAccountRoutes } from './routes/panel-accounts.js';
 import { registerServerRoutes } from './routes/servers.js';
 import { registerConsoleRoutes } from './routes/console.js';
 import { registerModRoutes } from './routes/mods.js';
@@ -104,6 +105,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await registerAdminAuthRoutes(api);
       await registerAccountRoutes(api);
       await registerNodeRoutes(api);
+      await registerPanelAccountRoutes(api);
       await registerServerRoutes(api);
       await registerConsoleRoutes(api);
       await registerModRoutes(api);

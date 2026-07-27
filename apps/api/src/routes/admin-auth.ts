@@ -27,6 +27,7 @@ import {
   adminChangePasswordSchema,
   adminLoginSchema,
   totpEnrollConfirmSchema,
+  isPanelAdministrator,
 } from '@asp/shared';
 import { z } from 'zod';
 
@@ -83,7 +84,9 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
     const account = await prisma.account.findFirst({
       where: {
         canonicalUsername: canonicalizeUsername(body.username),
-        type: 'ADMIN',
+        // Sub-admins hold a password and use this same screen. Filtering to
+        // ADMIN here made every sub-admin account unable to sign in at all.
+        type: { in: ['ADMIN', 'SUB_ADMIN'] },
         deletedAt: null,
       },
     });
@@ -309,7 +312,7 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       if (account.totpVerified && account.totpSecretEnc) {
         throw new AppError(409, 'totp_already_enrolled', 'Two-factor authentication is already set up.');
       }
-      if (account.type === 'ADMIN' && account.mustChangePassword) {
+      if (isPanelAdministrator(account) && account.mustChangePassword) {
         throw forbidden('Change your password before setting up two-factor authentication.');
       }
 
@@ -401,9 +404,9 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       // Enrolment is a privilege change - rotate and elevate.
       if (request.auth.session) {
         const rotated = await rotateSession(request.auth.session.id, {
-          elevated: account.type === 'ADMIN',
+          elevated: isPanelAdministrator(account),
         });
-        setSessionCookies(reply, rotated, account.type === 'ADMIN');
+        setSessionCookies(reply, rotated, isPanelAdministrator(account));
       }
 
       await audit({
@@ -435,7 +438,7 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       const session = request.auth.session;
 
       if (!session) throw forbidden('Step-up requires a browser session.');
-      if (account.type !== 'ADMIN' && !account.isPlatformOwner) {
+      if (!isPanelAdministrator(account)) {
         throw forbidden('Administrator access is required.');
       }
       if (!account.totpSecretEnc) throw forbidden('Two-factor authentication is not set up.');

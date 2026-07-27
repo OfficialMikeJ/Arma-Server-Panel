@@ -9,7 +9,14 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { Account, Session } from '@prisma/client';
-import { SESSION, ROLE_PERMISSIONS, type Permission, type UserRole } from '@asp/shared';
+import {
+  SESSION,
+  ROLE_PERMISSIONS,
+  panelPermissionsFor,
+  type Permission,
+  type PanelPermission,
+  type UserRole,
+} from '@asp/shared';
 import { prisma } from '../db/client.js';
 import { getClientIdentity, ipInAnyCidr, type ClientIdentity } from '../security/client-identity.js';
 import { resolveSession } from '../security/session.js';
@@ -42,6 +49,10 @@ declare module 'fastify' {
     requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requireActiveAccount: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requirePlatformAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    /** Returns a guard for one panel permission. See panel-permissions.ts. */
+    requirePanelPermission: (
+      permission: PanelPermission,
+    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
 
@@ -153,13 +164,44 @@ export default fp(async function authPlugin(app: FastifyInstance) {
     if (account.type !== 'ADMIN' && !account.isPlatformOwner) {
       throw forbidden('Administrator access is required.');
     }
-    // Administrative actions require an elevated session, which expires far
-    // sooner than a normal one.
-    if (request.auth.method === 'session' && request.auth.session && !request.auth.session.elevated) {
-      throw new AppError(403, 'step_up_required', 'Re-authenticate to perform administrative actions.');
-    }
+    await requireElevated(request);
   });
+
+  /**
+   * Guards a panel action by permission rather than by account type.
+   *
+   * A full ADMIN and the platform owner hold everything. A SUB_ADMIN holds only
+   * what was granted to them, which is the point: they can be given the node
+   * screen without being given every customer's server.
+   */
+  app.decorate(
+    'requirePanelPermission',
+    (permission: PanelPermission) =>
+      async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        await app.requireAuth(request, reply);
+        await app.requireActiveAccount(request, reply);
+
+        const account = request.auth.account!;
+        if (!panelPermissionsFor(account).has(permission)) {
+          throw forbidden(`This action needs the "${permission}" panel permission.`);
+        }
+        await requireElevated(request);
+      },
+  );
 });
+
+/**
+ * Anything administrative needs a recently re-authenticated session.
+ *
+ * Applies to sub-admins exactly as it does to full administrators - a narrower
+ * grant is still an administrative one, and a stolen cookie should not be able
+ * to use it hours later.
+ */
+async function requireElevated(request: FastifyRequest): Promise<void> {
+  if (request.auth.method === 'session' && request.auth.session && !request.auth.session.elevated) {
+    throw new AppError(403, 'step_up_required', 'Re-authenticate to perform administrative actions.');
+  }
+}
 
 async function authenticateApiKey(
   request: FastifyRequest,

@@ -1,38 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { formatMemory, formatStorage } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
+import { NodeAdmin, type NodeRow } from '@/components/panel/admin/NodeAdmin';
+import { SubAdminAdmin, type PanelAccountRow } from '@/components/panel/admin/SubAdminAdmin';
+import { AccessRequests, type AccessRequestRow } from '@/components/panel/admin/AccessRequests';
 
 /**
- * Platform administration: nodes and the audit trail.
+ * Platform administration: nodes, panel accounts, access requests and the
+ * audit trail.
+ *
+ * Each section is rendered only when the viewer holds the permission behind it,
+ * so a sub-admin sees exactly what they can act on rather than a page of
+ * buttons that return 403.
  *
  * Every route behind this needs an *elevated* session, which expires after
  * 20 minutes idle. A 403 with `step_up_required` means re-proving TOTP.
  */
-
-interface NodeRow {
-  id: string;
-  name: string;
-  region: string;
-  locationLabel: string;
-  status: string;
-  publicHost: string;
-  requirementsPass: boolean;
-  requirementsCheckedAt: string | null;
-  hardware: {
-    cpuThreads: number;
-    memoryMib: number;
-    storageGib: number;
-    downloadMbps: number;
-    uploadMbps: number;
-  };
-  capacity: {
-    cpuAvailable: number;
-    memoryMibAvailable: number;
-    storageGibAvailable: number;
-  };
-}
 
 interface AuditRow {
   id: string;
@@ -45,6 +29,9 @@ interface AuditRow {
 
 export default function AdminPage() {
   const [nodes, setNodes] = useState<NodeRow[]>([]);
+  const [accounts, setAccounts] = useState<PanelAccountRow[]>([]);
+  const [requests, setRequests] = useState<AccessRequestRow[]>([]);
+  const [me, setMe] = useState<{ id: string; panelPermissions: string[] } | null>(null);
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -55,12 +42,27 @@ export default function AdminPage() {
 
   const load = useCallback(async () => {
     try {
-      const [nodeResult, auditResult] = await Promise.all([
-        api.get<{ nodes: NodeRow[] }>('/admin/nodes'),
-        api.get<{ entries: AuditRow[] }>('/admin/audit?limit=50'),
+      // Who the viewer is decides which sections exist, so it is fetched first
+      // and on its own - a failure here means the page cannot be drawn at all.
+      const identity = await api.get<{
+        account: { id: string; panelPermissions: string[] };
+      }>('/account');
+      setMe(identity.account);
+
+      // Each section is optional. A sub-admin holding only panel:nodes.read
+      // gets the node list and no 403s for the three sections they cannot see,
+      // so one missing permission does not blank the page.
+      const [nodeResult, auditResult, accountResult, requestResult] = await Promise.all([
+        api.get<{ nodes: NodeRow[] }>('/admin/nodes').catch(skipForbidden),
+        api.get<{ entries: AuditRow[] }>('/admin/audit?limit=50').catch(skipForbidden),
+        api.get<{ accounts: PanelAccountRow[] }>('/admin/panel-accounts').catch(skipForbidden),
+        api.get<{ requests: AccessRequestRow[] }>('/admin/access-requests').catch(skipForbidden),
       ]);
-      setNodes(nodeResult.nodes);
-      setAudit(auditResult.entries);
+
+      setNodes(nodeResult?.nodes ?? []);
+      setAudit(auditResult?.entries ?? []);
+      setAccounts(accountResult?.accounts ?? []);
+      setRequests(requestResult?.requests ?? []);
       setStepUpNeeded(false);
       setError(null);
     } catch (caught) {
@@ -79,6 +81,23 @@ export default function AdminPage() {
     void load();
   }, [load]);
 
+  /**
+   * Whether the viewer holds a panel permission.
+   *
+   * The API is the authority; this only decides what to draw. A sub-admin who
+   * lacks a permission is not shown its section rather than shown a section
+   * that answers 403 on every action.
+   */
+  const can = (permission: string) => (me?.panelPermissions ?? []).includes(permission);
+
+  function report(caught: unknown, fallback: string) {
+    if (caught instanceof ApiError && caught.code === 'step_up_required') {
+      setStepUpNeeded(true);
+      return;
+    }
+    setError(caught instanceof ApiError ? caught.message : fallback);
+  }
+
   async function stepUp(event: React.FormEvent) {
     event.preventDefault();
     setBusy('stepup');
@@ -89,19 +108,6 @@ export default function AdminPage() {
       await load();
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'That code is not correct.');
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function recheck(nodeId: string) {
-    setBusy(nodeId);
-    setError(null);
-    try {
-      await api.post(`/admin/nodes/${nodeId}/recheck`);
-      await load();
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : 'The check failed.');
     } finally {
       setBusy(null);
     }
@@ -159,69 +165,32 @@ export default function AdminPage() {
     <div className="space-y-4">
       <h1 className="text-xl font-extrabold uppercase tracking-wide">Administration</h1>
 
-      {/* ---- Nodes ---- */}
-      <section className="space-y-2">
-        <h2 className="text-sm font-bold uppercase tracking-wide">Nodes</h2>
+      {can('panel:requests.review') ? (
+        <AccessRequests requests={requests} onChanged={load} onError={report} />
+      ) : null}
 
-        {nodes.length === 0 ? (
-          <div className="card text-center text-sm text-ink-800">No nodes registered.</div>
-        ) : (
-          nodes.map((node) => (
-            <div key={node.id} className="card space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <span className="font-bold">{node.locationLabel}</span>
-                  <span className="ml-2 text-xs text-ink-700">
-                    {node.name} · {node.region}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`badge ${
-                      node.status === 'ONLINE'
-                        ? 'bg-power-start/20 text-power-start'
-                        : 'bg-power-restart/20 text-power-restart'
-                    }`}
-                  >
-                    {node.status}
-                  </span>
-                  {!node.requirementsPass ? (
-                    <span className="badge bg-power-stop/20 text-power-stop">below minimum</span>
-                  ) : null}
-                </div>
-              </div>
+      {can('panel:nodes.read') ? (
+        <NodeAdmin
+          nodes={nodes}
+          canWrite={can('panel:nodes.write')}
+          onChanged={load}
+          onError={report}
+        />
+      ) : null}
 
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
-                <Stat label="CPU" value={`${node.capacity.cpuAvailable.toFixed(1)} / ${node.hardware.cpuThreads}`} />
-                <Stat
-                  label="Memory free"
-                  value={formatMemory(node.capacity.memoryMibAvailable)}
-                />
-                <Stat
-                  label="Storage free"
-                  value={formatStorage(node.capacity.storageGibAvailable)}
-                />
-                <Stat
-                  label="Link"
-                  value={`${node.hardware.downloadMbps}/${node.hardware.uploadMbps} Mbps`}
-                />
-              </dl>
-
-              <button
-                type="button"
-                className="btn-secondary w-full"
-                onClick={() => void recheck(node.id)}
-                disabled={busy !== null}
-              >
-                {busy === node.id ? 'Measuring…' : 'Re-run requirements check'}
-              </button>
-            </div>
-          ))
-        )}
-      </section>
+      {can('panel:accounts.read') ? (
+        <SubAdminAdmin
+          accounts={accounts}
+          grantable={me?.panelPermissions ?? []}
+          canWrite={can('panel:accounts.write')}
+          currentAccountId={me?.id ?? null}
+          onChanged={load}
+          onError={report}
+        />
+      ) : null}
 
       {/* ---- Audit ---- */}
-      <section className="card">
+      <section className={`card ${can('panel:audit.read') ? '' : 'hidden'}`}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="text-sm font-bold uppercase tracking-wide">Audit trail</h2>
           <button
@@ -293,11 +262,16 @@ export default function AdminPage() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="text-ink-700">{label}</dt>
-      <dd className="font-semibold">{value}</dd>
-    </div>
-  );
+
+/**
+ * Swallows a 403 so one missing permission does not blank the whole page.
+ *
+ * Anything else still propagates: a network failure or a step-up requirement
+ * is a real problem the operator needs to see.
+ */
+function skipForbidden(caught: unknown): null {
+  if (caught instanceof ApiError && caught.status === 403 && caught.code !== 'step_up_required') {
+    return null;
+  }
+  throw caught;
 }

@@ -18,11 +18,13 @@ import {
   powerActionSchema,
   resourceAllocationSchema,
   updateServerSchema,
+  ROLE_PERMISSIONS,
   type GameId,
+  type Permission,
 } from '@asp/shared';
 
 import { prisma } from '../db/client.js';
-import { assertPermission, resolveServerAccess } from '../plugins/auth.js';
+import { assertPermission, resolveServerAccess, type ServerAccess } from '../plugins/auth.js';
 import { buildKey, consumeRateLimit } from '../security/rate-limit.js';
 import { audit, AuditAction } from '../security/audit.js';
 import { badRequest, forbidden, notFound, tooManyRequests } from '../lib/errors.js';
@@ -340,10 +342,21 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
     });
 
     return reply.send({
+      // What the caller holds, so the UI can grey out anything they are not in
+      // a position to hand over.
+      grantable: [...access.permissions],
       members: members.map((member) => ({
         id: member.id,
         role: member.role.toLowerCase(),
+        // Both shapes: the explicit override as stored, and what the member can
+        // actually do. An empty override means "use the role default", so
+        // showing only the raw column would render every default member as
+        // having no permissions at all.
         permissions: member.permissions,
+        effectivePermissions:
+          member.permissions.length > 0
+            ? member.permissions
+            : [...ROLE_PERMISSIONS[roleKeyFor(member.role)]],
         createdAt: member.createdAt.toISOString(),
         account: {
           id: member.account.id,
@@ -387,8 +400,12 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
 
     const server = await loadServer(id);
     if (target.id === server.ownerId) throw badRequest('That account already owns this server.');
+    if (target.id === request.auth.account!.id) {
+      throw forbidden('You cannot change your own membership of this server.');
+    }
 
     const role = body.role.toUpperCase() as 'ADMIN' | 'OPERATOR' | 'VIEWER';
+    assertCanDelegate(access, role, body.permissionOverrides);
 
     const member = await prisma.serverMember.upsert({
       where: { serverId_accountId: { serverId: id, accountId: target.id } },
@@ -414,6 +431,75 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
     });
 
     return reply.status(201).send({ member: { id: member.id, role: member.role.toLowerCase() } });
+  });
+
+  /**
+   * Edits one member's permissions.
+   *
+   * Split from the add route so a sub-user's access can be tuned without
+   * re-stating who they are, and so the UI has somewhere to send a single
+   * checkbox change.
+   */
+  app.patch('/servers/:id/members/:memberId', guard, async (request, reply) => {
+    const { id, memberId } = z
+      .object({ id: cuidSchema, memberId: cuidSchema })
+      .parse(request.params);
+
+    const access = await resolveServerAccess(request, id);
+    assertPermission(access, 'server:members');
+
+    const { PERMISSIONS } = await import('@asp/shared');
+    const body = z
+      .object({
+        role: z.enum(['admin', 'operator', 'viewer']).optional(),
+        permissions: z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length).optional(),
+      })
+      .parse(request.body ?? {});
+
+    const member = await prisma.serverMember.findFirst({
+      where: { id: memberId, serverId: id },
+      include: { account: { select: { id: true, username: true } } },
+    });
+    if (!member) throw notFound('Member not found.');
+    if (member.role === 'OWNER') throw forbidden('The owner’s access cannot be edited.');
+    if (member.account.id === request.auth.account!.id) {
+      throw forbidden('You cannot change your own permissions. Request a change instead.');
+    }
+
+    const role = (body.role?.toUpperCase() ?? member.role) as 'ADMIN' | 'OPERATOR' | 'VIEWER';
+    assertCanDelegate(access, role, body.permissions);
+
+    const updated = await prisma.serverMember.update({
+      where: { id: memberId },
+      data: {
+        ...(body.role ? { role } : {}),
+        ...(body.permissions ? { permissions: body.permissions } : {}),
+      },
+      select: { id: true, role: true, permissions: true },
+    });
+
+    // The change applies on their next request, not their next sign-in.
+    const { revokeAllSessions } = await import('../security/session.js');
+    await revokeAllSessions(member.account.id, 'permissions_changed');
+
+    await audit({
+      accountId: request.auth.account!.id,
+      actorLabel: request.auth.account!.username,
+      action: AuditAction.MemberPermissionsChanged,
+      targetType: 'server',
+      targetId: id,
+      ipHash: request.auth.client.ipHash,
+      userAgentHash: request.auth.client.userAgentHash,
+      metadata: { member: member.account.username, role, permissions: body.permissions },
+    });
+
+    return reply.send({
+      member: {
+        id: updated.id,
+        role: updated.role.toLowerCase(),
+        permissions: updated.permissions,
+      },
+    });
   });
 
   app.delete('/servers/:id/members/:memberId', guard, async (request, reply) => {
@@ -514,6 +600,45 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
 }
 
 /* ------------------------------------------------------------------ */
+/** Maps the stored enum to the shared role vocabulary. */
+function roleKeyFor(role: string): 'owner' | 'admin' | 'operator' | 'viewer' {
+  switch (role) {
+    case 'OWNER':
+      return 'owner';
+    case 'ADMIN':
+      return 'admin';
+    case 'OPERATOR':
+      return 'operator';
+    default:
+      return 'viewer';
+  }
+}
+
+/**
+ * Nobody delegates access they do not hold.
+ *
+ * Without this, `server:members` alone would be enough to mint a membership
+ * with every permission on the server and use it, which makes the role
+ * distinction decorative. The server owner holds everything, so this never
+ * stands in their way - it constrains a delegated administrator handing out
+ * more than they were given.
+ */
+function assertCanDelegate(
+  access: ServerAccess,
+  role: 'ADMIN' | 'OPERATOR' | 'VIEWER',
+  overrides: readonly Permission[] | undefined,
+): void {
+  const roleKey = role.toLowerCase() as 'admin' | 'operator' | 'viewer';
+  const effective = overrides && overrides.length > 0 ? overrides : ROLE_PERMISSIONS[roleKey];
+
+  const excess = effective.filter((permission) => !access.permissions.has(permission));
+  if (excess.length > 0) {
+    throw forbidden(
+      `You cannot grant permissions you do not hold yourself: ${excess.join(', ')}.`,
+    );
+  }
+}
+
 /* Serialisation                                                       */
 /* ------------------------------------------------------------------ */
 

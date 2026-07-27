@@ -14,6 +14,7 @@ export function ServerTabs({ serverId }: { serverId: string }) {
     { href: `${base}/files`, label: 'Files' },
     { href: `${base}/settings`, label: 'Settings' },
     { href: `${base}/network`, label: 'Network' },
+    { href: `${base}/members`, label: 'Sub-users' },
     { href: `${base}/ai`, label: 'AI assistant' },
   ];
 

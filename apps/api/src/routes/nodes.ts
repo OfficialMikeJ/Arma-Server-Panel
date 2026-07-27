@@ -43,7 +43,10 @@ const createNodeSchema = z.object({
 });
 
 export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
-  const adminGuard = { onRequest: [app.requirePlatformAdmin] };
+  // Split read from write so a sub-admin can be given capacity visibility
+  // without being given the ability to add nodes or move port ranges.
+  const readNodes = { onRequest: [app.requirePanelPermission('panel:nodes.read')] };
+  const adminGuard = { onRequest: [app.requirePanelPermission('panel:nodes.write')] };
   const userGuard = { onRequest: [app.requireAuth, app.requireActiveAccount] };
 
   /** Nodes visible when creating a server - non-identifying fields only. */
@@ -71,7 +74,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Full detail, administrators only. */
-  app.get('/admin/nodes', adminGuard, async (_request, reply) => {
+  app.get('/admin/nodes', readNodes, async (_request, reply) => {
     const nodes = await prisma.node.findMany({ orderBy: { createdAt: 'asc' } });
 
     const detailed = await Promise.all(
@@ -299,7 +302,9 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
 
   /* ---- Platform audit access ---- */
 
-  app.get('/admin/audit', adminGuard, async (request, reply) => {
+  const auditGuard = { onRequest: [app.requirePanelPermission('panel:audit.read')] };
+
+  app.get('/admin/audit', auditGuard, async (request, reply) => {
     const query = z
       .object({
         limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -332,7 +337,7 @@ export async function registerNodeRoutes(app: FastifyInstance): Promise<void> {
   });
 
   /** Verifies the audit hash chain has not been tampered with. */
-  app.post('/admin/audit/verify', adminGuard, async (_request, reply) => {
+  app.post('/admin/audit/verify', auditGuard, async (_request, reply) => {
     const { verifyAuditChain } = await import('../security/audit.js');
     const result = await verifyAuditChain();
     return reply.send(result);
