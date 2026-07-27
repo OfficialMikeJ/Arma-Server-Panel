@@ -368,6 +368,94 @@ async function startWithRebuildOnBindFailure(server: Server): Promise<void> {
   await provisionServer(server.id);
 }
 
+/**
+ * Moves a server onto a freshly allocated port block.
+ *
+ * Ports are chosen when a server is created and never revisited, so a server
+ * made before the allocator learned each title's real ports keeps whatever it
+ * was given - an Arma 3 server sitting on 20000 instead of 2302, which is not
+ * where any player, launcher or direct-connect dialog expects it. Deleting and
+ * recreating the server would work and would also throw away its files.
+ *
+ * The new block is claimed before the old one is given up, so a failure part
+ * way through leaves the server with the ports it already had rather than none
+ * at all.
+ */
+export async function reallocateServerPorts(
+  serverId: string,
+  actor: { accountId: string; username: string; ipHash: string; userAgentHash: string },
+): Promise<{ basePort: number; previousBasePort: number }> {
+  const server = await loadServer(serverId);
+  const gameId = toGameId(server.game);
+
+  // Port bindings are baked into the container at creation and into the game's
+  // own config, so both have to be rewritten - which cannot be done underneath
+  // a running process.
+  if (toClientState(server.state) !== 'offline') {
+    throw conflict('Stop the server before moving it to different ports.');
+  }
+
+  const previousBasePort = server.basePort;
+  const existing = await prisma.portAllocation.findMany({
+    where: { serverId },
+    select: { id: true },
+  });
+
+  // Router mappings point at the old ports; they are going away either way.
+  // Imported here rather than at the top: port-forwarder imports this module
+  // back for toGameId, and a static cycle risks an undefined binding at load.
+  const { releaseServerPortMappings } = await import('../network/port-forwarder.js');
+  await releaseServerPortMappings(serverId).catch((error) => {
+    logger.warn({ err: error, serverId }, 'Could not remove old port mappings before reallocating');
+  });
+
+  const ports = await allocatePorts({ nodeId: server.nodeId, gameId, serverId });
+
+  if (ports.basePort === previousBasePort) {
+    // Nothing moved. Drop the block just claimed rather than leaving two.
+    await prisma.portAllocation.deleteMany({ where: { id: { in: ports.allocationIds } } });
+    return { basePort: previousBasePort, previousBasePort };
+  }
+
+  await prisma.portAllocation.deleteMany({ where: { id: { in: existing.map((row) => row.id) } } });
+  await prisma.portAllocation.updateMany({
+    where: { id: { in: ports.allocationIds } },
+    data: { serverId },
+  });
+
+  await prisma.server.update({
+    where: { id: serverId },
+    data: {
+      basePort: ports.basePort,
+      // Direct mappings publish the same number; a relay hands back its own,
+      // which the next port-opening run records.
+      publicBasePort: ports.basePort,
+    },
+  });
+
+  emitPanelNotice(
+    serverId,
+    `Ports moved from ${previousBasePort} to ${ports.basePort}. Update your router forward, then start the server.`,
+  );
+
+  // Rebuilds the container against the new bindings. The volume is untouched,
+  // so game files, configs, mods and saves all survive.
+  await provisionServer(serverId);
+
+  await audit({
+    accountId: actor.accountId,
+    actorLabel: actor.username,
+    action: AuditAction.PortMappingRemoved,
+    targetType: 'server',
+    targetId: serverId,
+    ipHash: actor.ipHash,
+    userAgentHash: actor.userAgentHash,
+    metadata: { from: previousBasePort, to: ports.basePort, reason: 'reallocated' },
+  });
+
+  return { basePort: ports.basePort, previousBasePort };
+}
+
 export async function provisionServer(serverId: string): Promise<void> {
   const server = await loadServer(serverId);
   const gameId = toGameId(server.game);

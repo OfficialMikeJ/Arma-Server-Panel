@@ -12,7 +12,7 @@ import {
   releaseServerPortMappings,
 } from '../modules/network/port-forwarder.js';
 import { isRelayConfigured } from '../modules/network/relay.js';
-import { loadServer } from '../modules/servers/server-service.js';
+import { loadServer, reallocateServerPorts, toGameId } from '../modules/servers/server-service.js';
 import { probeReachability } from '../modules/network/reachability.js';
 
 export async function registerNetworkRoutes(app: FastifyInstance): Promise<void> {
@@ -31,6 +31,9 @@ export async function registerNetworkRoutes(app: FastifyInstance): Promise<void>
 
     return reply.send({
       address: `${server.publicHost}:${server.publicBasePort}`,
+      // So the page can say whether this server sits on the block its title
+      // normally uses, and offer to move it if not.
+      game: toGameId(server.game),
       useRelay: server.useRelay,
       autoPortForward: server.autoPortForward,
       relayAvailable: isRelayConfigured(),
@@ -62,6 +65,36 @@ export async function registerNetworkRoutes(app: FastifyInstance): Promise<void>
         : environment.directPublic
           ? 'Players connect straight to this machine’s public address, which is what a hosted deployment is for. Relay mode is available if you would rather it stayed hidden.'
           : 'Players connect directly, which means they can see this connection’s public IP address. Enable relay mode to keep it private.',
+    });
+  });
+
+  /**
+   * Moves the server onto a freshly allocated port block.
+   *
+   * For a server created before the allocator knew each title's real ports -
+   * an Arma 3 server on 20000 rather than 2302. The alternative was deleting
+   * and recreating it, which also deletes its files.
+   */
+  app.post('/servers/:id/network/reallocate', guard, async (request, reply) => {
+    const { id } = z.object({ id: cuidSchema }).parse(request.params);
+    const access = await resolveServerAccess(request, id);
+    assertPermission(access, 'server:network');
+
+    const account = request.auth.account!;
+    const result = await reallocateServerPorts(id, {
+      accountId: account.id,
+      username: account.username,
+      ipHash: request.auth.client.ipHash,
+      userAgentHash: request.auth.client.userAgentHash,
+    });
+
+    return reply.send({
+      ...result,
+      moved: result.basePort !== result.previousBasePort,
+      message:
+        result.basePort === result.previousBasePort
+          ? 'This server is already on the correct ports for its game.'
+          : `Moved from ${result.previousBasePort} to ${result.basePort}. Update the forward on your router before starting it.`,
     });
   });
 

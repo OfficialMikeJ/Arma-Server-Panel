@@ -1,11 +1,13 @@
 'use client';
 
 import { use, useCallback, useEffect, useState } from 'react';
+import { GAMES, type GameId } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
 import { ServerTabs } from '@/components/panel/ServerTabs';
 
 interface NetworkState {
   address: string;
+  game: GameId;
   useRelay: boolean;
   autoPortForward: boolean;
   relayAvailable: boolean;
@@ -38,6 +40,7 @@ export default function NetworkPage({ params }: { params: Promise<{ id: string }
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ForwardResult | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +71,22 @@ export default function NetworkPage({ params }: { params: Promise<{ id: string }
     }
   }
 
+  async function reallocate() {
+    setBusy('reallocate');
+    setError(null);
+    setResult(null);
+    setNotice(null);
+    try {
+      const moved = await api.post<{ message: string }>(`/servers/${id}/network/reallocate`);
+      setNotice(moved.message);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof ApiError ? caught.message : 'Could not move the ports.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function verify() {
     setBusy('verify');
     setError(null);
@@ -93,6 +112,11 @@ export default function NetworkPage({ params }: { params: Promise<{ id: string }
       setBusy(null);
     }
   }
+
+  const game = state ? GAMES[state.game] : null;
+  const expectedBase = game?.portBlock.base ?? null;
+  // The game port carries the base; every other port is an offset from it.
+  const currentBase = state?.ports.find((port) => port.key === 'game')?.external ?? null;
 
   if (loading || !state) {
     return (
@@ -184,6 +208,34 @@ RELAY_TOKEN=$(openssl rand -hex 32) \\
         </p>
       </section>
 
+      {/* ---- Port block ---- */}
+      {expectedBase !== null && currentBase !== null && currentBase !== expectedBase ? (
+        <section className="card space-y-3 border-power-restart/40">
+          <h2 className="text-sm font-bold uppercase tracking-wide text-power-restart">
+            Not on this game&apos;s usual ports
+          </h2>
+          <p className="text-xs leading-relaxed text-ink-900">
+            This server sits on <span className="font-mono">{currentBase}</span>.{' '}
+            {GAMES[state.game].name} servers
+            normally start at <span className="font-mono">{expectedBase}</span>, which is where
+            players, launchers and direct-connect dialogs expect to find one. It was created before
+            the panel placed each title on its own ports.
+          </p>
+          <p className="text-xs leading-relaxed text-ink-700">
+            Moving it keeps every file, config, mod and save — only the ports change. The server has
+            to be stopped, and your router forward needs updating to the new block afterwards.
+          </p>
+          <button
+            type="button"
+            className="btn-secondary w-full"
+            onClick={() => void reallocate()}
+            disabled={busy !== null}
+          >
+            {busy === 'reallocate' ? 'Moving…' : `Move to ${expectedBase}`}
+          </button>
+        </section>
+      ) : null}
+
       {/* ---- Actions ---- */}
       <section className="card space-y-3">
         <h2 className="text-sm font-bold uppercase tracking-wide">Open ports</h2>
@@ -268,6 +320,10 @@ RELAY_TOKEN=$(openssl rand -hex 32) \\
           </table>
         </div>
       </section>
+
+      {notice ? (
+        <p className="rounded-md bg-power-start/10 p-3 text-sm text-power-start">{notice}</p>
+      ) : null}
 
       {error ? (
         <p role="alert" className="rounded-md bg-power-stop/10 p-3 text-sm text-power-stop">
