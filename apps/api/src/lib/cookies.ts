@@ -8,7 +8,7 @@
  */
 
 import type { FastifyReply } from 'fastify';
-import { SESSION, sessionCookieNames } from '@asp/shared';
+import { SESSION, TRUSTED_DEVICE, sessionCookieNames } from '@asp/shared';
 import { loadConfig } from '../config/env.js';
 
 interface CookieOptions {
@@ -62,4 +62,34 @@ export function clearSessionCookies(reply: FastifyReply): void {
   const names = cookieNames();
   reply.setCookie(names.session, '', options);
   reply.setCookie(names.csrf, '', { ...options, httpOnly: false });
+}
+
+/* ------------------------------------------------------------------ */
+/* Trusted device                                                      */
+/* ------------------------------------------------------------------ */
+
+/** Same prefix rule as the session cookies: __Host- needs Secure. */
+export function trustedDeviceCookieName(): string {
+  return loadConfig().REQUIRE_SECURE_COOKIES
+    ? TRUSTED_DEVICE.cookieName
+    : TRUSTED_DEVICE.insecureCookieName;
+}
+
+export function setTrustedDeviceCookie(reply: FastifyReply, token: string): void {
+  reply.setCookie(trustedDeviceCookieName(), token, {
+    ...baseOptions(Math.floor(TRUSTED_DEVICE.ttlMs / 1000)),
+    // Outlives the session deliberately - that is the entire point.
+    httpOnly: true,
+  });
+}
+
+export function clearTrustedDeviceCookie(reply: FastifyReply): void {
+  reply.setCookie(trustedDeviceCookieName(), '', { ...baseOptions(0), maxAge: 0 });
+}
+
+/** Reads whichever name is in play, so a transport change does not strand one. */
+export function readTrustedDeviceCookie(
+  cookies: Record<string, string | undefined>,
+): string | undefined {
+  return cookies[TRUSTED_DEVICE.cookieName] ?? cookies[TRUSTED_DEVICE.insecureCookieName];
 }

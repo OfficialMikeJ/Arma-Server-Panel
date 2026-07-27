@@ -40,7 +40,8 @@ import { buildOtpAuthUri, generateTotpSecret, verifyTotp } from '../security/tot
 import { generateRecoveryCodes } from '../security/recovery-codes.js';
 import { createSession, revokeAllSessions, rotateSession } from '../security/session.js';
 import { clearAuthFailures, getLockoutState, recordAuthFailure } from '../security/lockout.js';
-import { setSessionCookies } from '../lib/cookies.js';
+import { clearTrustedDeviceCookie, setSessionCookies } from '../lib/cookies.js';
+import { revokeAllDevices } from '../security/trusted-device.js';
 import { AppError, badRequest, forbidden, tooManyRequests, unauthorized } from '../lib/errors.js';
 import {
   CHALLENGE_TTL,
@@ -260,12 +261,15 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
         });
       });
 
-      // A password change invalidates every other session for this account.
+      // A password change invalidates every other session for this account,
+      // and every browser that was allowed to skip the authenticator.
       const revoked = await revokeAllSessions(
         account.id,
         'password_changed',
         request.auth.session?.id,
       );
+      await revokeAllDevices(account.id, 'password_changed');
+      clearTrustedDeviceCookie(reply);
 
       // Rotate the surviving session so a token captured pre-change is dead.
       if (request.auth.session) {
@@ -374,6 +378,10 @@ export async function registerAdminAuthRoutes(app: FastifyInstance): Promise<voi
       }
 
       const recovery = await generateRecoveryCodes();
+
+      // Re-enrolling replaces the second factor, so previous bypasses die too.
+      await revokeAllDevices(account.id, 'totp_reenrolled');
+      clearTrustedDeviceCookie(reply);
 
       await prisma.$transaction(async (tx) => {
         await tx.recoveryCode.deleteMany({ where: { accountId: account.id } });

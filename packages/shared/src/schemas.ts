@@ -19,10 +19,32 @@ export const totpCodeSchema = z
   .trim()
   .regex(/^\d{6}$/, 'Enter the 6-digit code from your authenticator app');
 
+/**
+ * A recovery code, in whatever shape the user pasted it.
+ *
+ * Demanding exact `XXXX-XXXX-XXXX-XXXX` uppercase rejected perfectly valid
+ * codes typed in lowercase or pasted without the hyphens, and reported it as
+ * "invalid code" - indistinguishable from a wrong one. Normalise first, judge
+ * afterwards.
+ */
 export const recoveryCodeSchema = z
   .string()
   .trim()
-  .regex(/^[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}-[A-Z2-7]{4}$/, 'Invalid recovery code');
+  .transform((value) => value.toUpperCase().replace(/[^A-Z2-7]/g, ''))
+  .refine((value) => value.length === 16, 'Recovery codes are 16 characters');
+
+/** Either an authenticator code or a recovery code; the route decides which. */
+export const authCodeSchema = z
+  .string()
+  .trim()
+  .min(6)
+  .max(40)
+  .refine((v) => !/[\p{Cc}]/u.test(v), 'Code contains control characters');
+
+/** True when the input looks like a recovery code rather than a TOTP code. */
+export function looksLikeRecoveryCode(value: string): boolean {
+  return value.trim().toUpperCase().replace(/[^A-Z2-7]/g, '').length === 16;
+}
 
 /**
  * Admin password policy. Deliberately strict: this account can reach every
@@ -95,7 +117,13 @@ export const loginStartSchema = z.object({
 
 export const loginVerifySchema = z.object({
   challengeToken: z.string().min(16).max(256),
-  code: z.union([totpCodeSchema, recoveryCodeSchema]),
+  code: authCodeSchema,
+  /**
+   * Skip the authenticator on this browser for the next 14 days. Opt-in, and
+   * only ever skips the second factor - the account still has to be identified,
+   * and administrators still re-prove TOTP before privileged actions.
+   */
+  rememberDevice: z.boolean().default(false),
 });
 
 export const adminLoginSchema = z.object({

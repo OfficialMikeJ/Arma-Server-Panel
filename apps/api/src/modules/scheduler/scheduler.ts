@@ -10,6 +10,7 @@ import { CONSOLE_LIMITS, METRICS, AUDIT } from '@asp/shared';
 import { prisma } from '../../db/client.js';
 import { logger } from '../../lib/logger.js';
 import { pruneExpiredSessions } from '../../security/session.js';
+import { pruneExpiredDevices } from '../../security/trusted-device.js';
 import { pruneExpiredRateCounters } from '../../security/rate-limit.js';
 import { pruneExpiredChallenges } from '../auth/challenges.js';
 import { pruneUsernameAttempts } from '../auth/username-policy.js';
@@ -40,6 +41,12 @@ const tasks: Task[] = [
     intervalMs: 15 * MINUTE,
     lastRun: 0,
     run: pruneExpiredSessions,
+  },
+  {
+    name: 'prune-trusted-devices',
+    intervalMs: HOUR,
+    lastRun: 0,
+    run: pruneExpiredDevices,
   },
   {
     name: 'prune-challenges',

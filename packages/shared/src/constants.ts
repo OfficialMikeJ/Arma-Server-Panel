@@ -106,6 +106,24 @@ export const SESSION = Object.freeze({
   rotateAfterMs: 15 * 60 * 1000,
 });
 
+/**
+ * "Remember this device" - skips the authenticator prompt on a browser that has
+ * already proved it, for a bounded period.
+ *
+ * It only ever skips the *second* factor. The account is still identified, an
+ * administrator still needs their password, and privileged admin actions still
+ * require a fresh TOTP step-up. Revoked by signing out everywhere, changing a
+ * password, or re-enrolling TOTP.
+ */
+export const TRUSTED_DEVICE = Object.freeze({
+  cookieName: '__Host-asp_device',
+  insecureCookieName: 'asp_device',
+  ttlMs: 14 * 24 * 60 * 60 * 1000,
+  tokenBytes: 32,
+  /** Most people do not have more than a handful of browsers. */
+  maxPerAccount: 10,
+});
+
 export const TOTP = Object.freeze({
   issuer: PANEL_NAME,
   digits: 6,

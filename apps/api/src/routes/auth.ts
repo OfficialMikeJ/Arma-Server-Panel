@@ -15,6 +15,7 @@ import {
   TOTP,
   loginStartSchema,
   loginVerifySchema,
+  looksLikeRecoveryCode,
   registerCompleteSchema,
   registerStartSchema,
   usernameSchema,
@@ -31,7 +32,18 @@ import { buildOtpAuthUri, generateTotpSecret, verifyTotp } from '../security/tot
 import { findMatchingRecoveryCode, generateRecoveryCodes } from '../security/recovery-codes.js';
 import { createSession, revokeAllSessions, revokeSession } from '../security/session.js';
 import { clearAuthFailures, getLockoutState, recordAuthFailure } from '../security/lockout.js';
-import { clearSessionCookies, setSessionCookies } from '../lib/cookies.js';
+import {
+  clearSessionCookies,
+  clearTrustedDeviceCookie,
+  readTrustedDeviceCookie,
+  setSessionCookies,
+  setTrustedDeviceCookie,
+} from '../lib/cookies.js';
+import {
+  isDeviceTrusted,
+  revokeAllDevices,
+  trustDevice,
+} from '../security/trusted-device.js';
 import {
   AppError,
   badRequest,
@@ -346,6 +358,49 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       where: { canonicalUsername: canonicalizeUsername(body.username), deletedAt: null },
     });
 
+    // This browser may already have proved TOTP for this account recently.
+    // Only the second factor is waived - identity still had to be supplied.
+    if (account && account.totpVerified && account.status === 'ACTIVE') {
+      const deviceToken = readTrustedDeviceCookie(
+        request.cookies as Record<string, string | undefined>,
+      );
+
+      if (await isDeviceTrusted(deviceToken, account.id, client)) {
+        const lockout = await getLockoutState(account.id);
+        if (lockout.locked) {
+          throw tooManyRequests(
+            'This account is temporarily locked after repeated failed attempts.',
+            ((lockout.until?.getTime() ?? Date.now()) - Date.now()) / 1000,
+          );
+        }
+
+        await prisma.account.update({
+          where: { id: account.id },
+          data: { lastLoginAt: new Date(), lastLoginIpHash: client.ipHash },
+        });
+
+        // Never elevated: an administrator still steps up with a fresh code
+        // before anything privileged.
+        const issued = await createSession(account, client, { elevated: false });
+        setSessionCookies(reply, { token: issued.token, csrfToken: issued.csrfToken }, false);
+
+        await audit({
+          accountId: account.id,
+          actorLabel: account.username,
+          action: AuditAction.LoginSucceeded,
+          ipHash: client.ipHash,
+          userAgentHash: client.userAgentHash,
+          metadata: { method: 'trusted_device' },
+        });
+
+        return reply.send({
+          outcome: 'authenticated',
+          account: publicAccount(account),
+          message: 'Signed in on a remembered device.',
+        });
+      }
+    }
+
     // A challenge is always issued, even for an unknown username, so the
     // response is identical either way and accounts cannot be enumerated.
     const challenge = await issueChallenge({
@@ -357,6 +412,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     });
 
     return reply.send({
+      outcome: 'totp_required',
       challengeToken: challenge.token,
       expiresAt: challenge.expiresAt.toISOString(),
       message: 'Enter the 6-digit code from your authenticator app.',
@@ -416,7 +472,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       throw forbidden('This account has not finished two-factor setup.');
     }
 
-    const isRecoveryCode = body.code.includes('-');
+    // Decided by shape, not by punctuation: a recovery code normalises to 16
+    // base32 characters whether or not the user kept the hyphens.
+    const isRecoveryCode = looksLikeRecoveryCode(body.code);
     let verifiedStep: number | null = null;
     let usedRecoveryCodeId: string | null = null;
 
@@ -484,6 +542,13 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       { token: issued.token, csrfToken: issued.csrfToken },
       account.type === 'ADMIN',
     );
+
+    // Only offered after a real second factor. A recovery code is a sign that
+    // the authenticator is already lost, so it does not earn a 14-day bypass.
+    if (body.rememberDevice && !usedRecoveryCodeId) {
+      const device = await trustDevice(account.id, client);
+      setTrustedDeviceCookie(reply, device.token);
+    }
 
     await audit({
       accountId: account.id,
@@ -664,6 +729,8 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     if (session) await revokeSession(session.id, 'user_logout');
     clearSessionCookies(reply);
+    // A normal sign-out keeps the device trusted; that is what the option is
+    // for. "Sign out everywhere" below is what revokes it.
 
     if (account) {
       await audit({
@@ -684,6 +751,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const { account, session, client } = request.auth;
       const revoked = await revokeAllSessions(account!.id, 'logout_everywhere', session?.id);
+      // Signing out everywhere has to mean everywhere, including browsers that
+      // would otherwise skip the authenticator.
+      const devices = await revokeAllDevices(account!.id, 'logout_everywhere');
+      clearTrustedDeviceCookie(reply);
 
       await audit({
         accountId: account!.id,
@@ -691,10 +762,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
         action: AuditAction.SessionRevoked,
         ipHash: client.ipHash,
         userAgentHash: client.userAgentHash,
-        metadata: { revoked },
+        metadata: { revoked, trustedDevicesRevoked: devices },
       });
 
-      return reply.send({ ok: true, revoked });
+      return reply.send({ ok: true, revoked, trustedDevicesRevoked: devices });
     },
   );
 }

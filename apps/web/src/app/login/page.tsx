@@ -33,6 +33,7 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [discordEnabled, setDiscordEnabled] = useState(false);
+  const [rememberDevice, setRememberDevice] = useState(true);
 
   useEffect(() => {
     api
@@ -46,11 +47,20 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      const result = await api.post<{ challengeToken: string; message: string }>(
-        '/auth/login/start',
-        { username },
-      );
-      setChallengeToken(result.challengeToken);
+      const result = await api.post<{
+        outcome?: 'authenticated' | 'totp_required';
+        challengeToken?: string;
+        message: string;
+      }>('/auth/login/start', { username });
+
+      // This browser was remembered, so the authenticator step is skipped.
+      if (result.outcome === 'authenticated') {
+        router.push('/panel');
+        router.refresh();
+        return;
+      }
+
+      setChallengeToken(result.challengeToken ?? '');
       setNotice(result.message);
       setStep('totp');
     } catch (caught) {
@@ -95,7 +105,11 @@ export default function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.post('/auth/login/verify', { challengeToken, code: code.trim() });
+      await api.post('/auth/login/verify', {
+        challengeToken,
+        code: code.trim(),
+        rememberDevice,
+      });
       router.push('/panel');
       router.refresh();
     } catch (caught) {
@@ -236,14 +250,28 @@ export default function LoginPage() {
                   inputMode="text"
                   autoComplete="one-time-code"
                   autoFocus
-                  maxLength={19}
+                  maxLength={40}
                   placeholder="000000"
                   required
                 />
                 <p className="mt-1.5 text-xs text-ink-700">
-                  Lost your authenticator? Enter a recovery code instead.
+                  Lost your authenticator? Enter a recovery code instead — hyphens and capitals do
+                  not matter.
                 </p>
               </div>
+
+              <label className="flex cursor-pointer items-start gap-2 text-xs leading-relaxed text-ink-900">
+                <input
+                  type="checkbox"
+                  checked={rememberDevice}
+                  onChange={(event) => setRememberDevice(event.target.checked)}
+                  className="mt-0.5 accent-brand-500"
+                />
+                <span>
+                  Remember this browser for 14 days — you&apos;ll only need your username to sign in.
+                  Uncheck on a shared computer.
+                </span>
+              </label>
 
               <button type="submit" className="btn-primary w-full" disabled={busy || code.length < 6}>
                 {busy ? 'Verifying…' : 'Sign in'}

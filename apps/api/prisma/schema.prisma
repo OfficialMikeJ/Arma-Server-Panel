@@ -80,6 +80,7 @@ model Account {
   deletedAt         DateTime?
 
   sessions          Session[]
+  trustedDevices    TrustedDevice[]
   recoveryCodes     RecoveryCode[]
   apiKeys           ApiKey[]
   ownedServers      Server[]       @relation("ServerOwner")
@@ -104,6 +105,29 @@ model RecoveryCode {
 
   @@index([accountId])
   @@map("recovery_codes")
+}
+
+/// A browser that has already proved TOTP and may skip it for a bounded time.
+/// Only ever waives the second factor - never identity, never admin step-up.
+model TrustedDevice {
+  id            String    @id @default(cuid())
+  accountId     String
+  account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the opaque cookie value. The raw token exists only in the browser.
+  tokenHash     String    @unique
+  /// Bound to the browser it was issued to; a mismatch revokes it.
+  userAgentHash String
+
+  lastUsedAt    DateTime  @default(now())
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  revokedReason String?
+  createdAt     DateTime  @default(now())
+
+  @@index([accountId])
+  @@index([expiresAt])
+  @@map("trusted_devices")
 }
 
 model Session {
