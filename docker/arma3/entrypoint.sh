@@ -21,6 +21,32 @@ log() {
 mkdir -p "${GAME_DIR}" "${CONFIG_DIR}" "${PROFILE_DIR}" "${MODS_DIR}" "${BATTLEYE_DIR}"
 
 ###############################################################################
+# Writable locations for SteamCMD
+#
+# The root filesystem is read-only by design and the data volume is the only
+# writable path. SteamCMD needs to write in two places that are not on it:
+#
+#   * its own installation directory, which it self-updates on every run
+#   * $HOME, where it keeps ~/.steam
+#
+# /opt/steamcmd and /home/steam are both on the read-only root, so without this
+# the download fails immediately and the container exits 1 - which is what a
+# "server crashed" with no game files actually was.
+#
+# Staged onto the volume once; the copy survives restarts and reinstalls.
+###############################################################################
+
+export HOME="${SERVER_DIR}/.home"
+STEAMCMD_DIR="${SERVER_DIR}/.steamcmd"
+mkdir -p "${HOME}" "${STEAMCMD_DIR}"
+
+if [ ! -x "${STEAMCMD_DIR}/steamcmd.sh" ]; then
+  log "Staging SteamCMD onto the data volume (the root filesystem is read-only)."
+  cp -a /opt/steamcmd/. "${STEAMCMD_DIR}/"
+fi
+
+
+###############################################################################
 # Install / update game files
 ###############################################################################
 
@@ -35,7 +61,7 @@ if [ ! -x "${GAME_DIR}/arma3server_x64" ]; then
 
   # Credentials arrive via the environment and are never written to disk or
   # echoed. SteamCMD is invoked with a positional argument list, not a string.
-  /opt/steamcmd/steamcmd.sh \
+  "${STEAMCMD_DIR}/steamcmd.sh" \
     +force_install_dir "${GAME_DIR}" \
     +login "${STEAM_USERNAME}" "${STEAM_PASSWORD:-}" \
     +app_update "${STEAM_APP_ID}" validate \
@@ -47,6 +73,22 @@ if [ ! -x "${GAME_DIR}/arma3server_x64" ]; then
   fi
 
   log "Download complete."
+fi
+
+###############################################################################
+# Steam client library
+#
+# The dedicated server dlopen()s steamclient.so from ~/.steam/sdk64 at startup
+# and exits if it is not there. SteamCMD ships the library; the server package
+# does not, and nothing in the download puts it where the server looks.
+###############################################################################
+
+mkdir -p "${HOME}/.steam/sdk32" "${HOME}/.steam/sdk64"
+if [ -f "${STEAMCMD_DIR}/linux64/steamclient.so" ]; then
+  cp -f "${STEAMCMD_DIR}/linux64/steamclient.so" "${HOME}/.steam/sdk64/steamclient.so"
+fi
+if [ -f "${STEAMCMD_DIR}/linux32/steamclient.so" ]; then
+  cp -f "${STEAMCMD_DIR}/linux32/steamclient.so" "${HOME}/.steam/sdk32/steamclient.so"
 fi
 
 ###############################################################################

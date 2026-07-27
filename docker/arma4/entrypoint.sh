@@ -17,6 +17,32 @@ log() {
 
 mkdir -p "${GAME_DIR}" "${CONFIG_DIR}" "${PROFILE_DIR}"
 
+###############################################################################
+# Writable locations for SteamCMD
+#
+# The root filesystem is read-only by design and the data volume is the only
+# writable path. SteamCMD needs to write in two places that are not on it:
+#
+#   * its own installation directory, which it self-updates on every run
+#   * $HOME, where it keeps ~/.steam
+#
+# /opt/steamcmd and /home/steam are both on the read-only root, so without this
+# the download fails immediately and the container exits 1 - which is what a
+# "server crashed" with no game files actually was.
+#
+# Staged onto the volume once; the copy survives restarts and reinstalls.
+###############################################################################
+
+export HOME="${SERVER_DIR}/.home"
+STEAMCMD_DIR="${SERVER_DIR}/.steamcmd"
+mkdir -p "${HOME}" "${STEAMCMD_DIR}"
+
+if [ ! -x "${STEAMCMD_DIR}/steamcmd.sh" ]; then
+  log "Staging SteamCMD onto the data volume (the root filesystem is read-only)."
+  cp -a /opt/steamcmd/. "${STEAMCMD_DIR}/"
+fi
+
+
 if [ -z "${STEAM_APP_ID:-}" ]; then
   log "Arma 4 has not been released, so there is no server package to install."
   log "When it launches: set STEAM_APP_ID on this image, flip released to true"
@@ -26,7 +52,7 @@ fi
 
 if [ ! -x "${GAME_DIR}/${SERVER_BINARY}" ]; then
   log "Downloading Arma 4 server files with SteamCMD."
-  /opt/steamcmd/steamcmd.sh \
+  "${STEAMCMD_DIR}/steamcmd.sh" \
     +force_install_dir "${GAME_DIR}" \
     +login anonymous \
     +app_update "${STEAM_APP_ID}" validate \

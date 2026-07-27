@@ -19,8 +19,14 @@ RUN dpkg --add-architecture i386 \
  && apt-get install -y --no-install-recommends ca-certificates curl lib32gcc-s1 \
  && rm -rf /var/lib/apt/lists/*
 
+# SteamCMD download.
+#
+# Valve's documented host first, with the older CDN alias as a fallback:
+# that alias intermittently refuses requests, and when it does the image
+# build fails with nothing but a curl exit code to go on.
 RUN mkdir -p /opt/steamcmd \
- && curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz \
+ && ( curl -fsSL https://media.steampowered.com/client/installer/steamcmd_linux.tar.gz \
+      || curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz ) \
     | tar -xz -C /opt/steamcmd
 
 
