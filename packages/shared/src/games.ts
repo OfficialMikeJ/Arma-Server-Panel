@@ -23,7 +23,14 @@ export interface PortSpec {
   optional?: boolean;
 }
 
-export interface GameDefinition {
+/**
+ * A title compiled into the panel.
+ *
+ * Distinct from the uploadable game *definition* document in
+ * game-definition.ts: this is the shape the adapters and UI are written
+ * against, that one is what an administrator can supply.
+ */
+export interface BuiltInGame {
   id: GameId;
   name: string;
   shortName: string;
@@ -73,7 +80,7 @@ export interface GameDefinition {
   editableStartupParams: string[];
 }
 
-export const GAMES: Readonly<Record<GameId, GameDefinition>> = Object.freeze({
+export const GAMES: Readonly<Record<GameId, BuiltInGame>> = Object.freeze({
   arma3: {
     id: 'arma3',
     name: 'Arma 3',
@@ -187,11 +194,11 @@ export function isGameId(value: unknown): value is GameId {
   return typeof value === 'string' && (GAME_IDS as readonly string[]).includes(value);
 }
 
-export function getGame(id: GameId): GameDefinition {
+export function getGame(id: GameId): BuiltInGame {
   return GAMES[id];
 }
 
 /** Titles that can actually be provisioned right now. */
-export function releasedGames(): GameDefinition[] {
+export function releasedGames(): BuiltInGame[] {
   return GAME_IDS.map((id) => GAMES[id]).filter((g) => g.released);
 }

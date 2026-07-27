@@ -186,6 +186,8 @@ export const AuditAction = {
   NodeUpdated: 'panel.node.updated',
   SteamCredentialsSaved: 'panel.steam.credentials_saved',
   SteamCredentialsCleared: 'panel.steam.credentials_cleared',
+  GameDefinitionSaved: 'panel.game.definition_saved',
+  GameDefinitionDeleted: 'panel.game.definition_deleted',
 
   // networking
   PortMappingCreated: 'network.port.mapped',

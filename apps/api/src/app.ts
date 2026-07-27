@@ -20,6 +20,7 @@ import { registerSetupRoutes } from './routes/setup.js';
 import { registerAccountRoutes } from './routes/account.js';
 import { registerNodeRoutes } from './routes/nodes.js';
 import { registerPanelAccountRoutes } from './routes/panel-accounts.js';
+import { registerGameDefinitionRoutes } from './routes/game-definitions.js';
 import { registerServerRoutes } from './routes/servers.js';
 import { registerConsoleRoutes } from './routes/console.js';
 import { registerModRoutes } from './routes/mods.js';
@@ -106,6 +107,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       await registerAccountRoutes(api);
       await registerNodeRoutes(api);
       await registerPanelAccountRoutes(api);
+      await registerGameDefinitionRoutes(api);
       await registerServerRoutes(api);
       await registerConsoleRoutes(api);
       await registerModRoutes(api);

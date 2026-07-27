@@ -9,6 +9,10 @@ import {
   SteamCredentials,
   type SteamCredentialStatus,
 } from '@/components/panel/admin/SteamCredentials';
+import {
+  GameDefinitions,
+  type StoredDefinition,
+} from '@/components/panel/admin/GameDefinitions';
 
 /**
  * Platform administration: nodes, panel accounts, access requests and the
@@ -37,6 +41,8 @@ export default function AdminPage() {
   const [requests, setRequests] = useState<AccessRequestRow[]>([]);
   const [me, setMe] = useState<{ id: string; panelPermissions: string[] } | null>(null);
   const [steam, setSteam] = useState<SteamCredentialStatus | null>(null);
+  const [games, setGames] = useState<StoredDefinition[]>([]);
+  const [placeholders, setPlaceholders] = useState<string[]>([]);
   const [audit, setAudit] = useState<AuditRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -57,12 +63,22 @@ export default function AdminPage() {
       // Each section is optional. A sub-admin holding only panel:nodes.read
       // gets the node list and no 403s for the three sections they cannot see,
       // so one missing permission does not blank the page.
-      const [nodeResult, auditResult, accountResult, requestResult, steamResult] = await Promise.all([
+      const [
+        nodeResult,
+        auditResult,
+        accountResult,
+        requestResult,
+        steamResult,
+        gameResult,
+      ] = await Promise.all([
         api.get<{ nodes: NodeRow[] }>('/admin/nodes').catch(skipForbidden),
         api.get<{ entries: AuditRow[] }>('/admin/audit?limit=50').catch(skipForbidden),
         api.get<{ accounts: PanelAccountRow[] }>('/admin/panel-accounts').catch(skipForbidden),
         api.get<{ requests: AccessRequestRow[] }>('/admin/access-requests').catch(skipForbidden),
         api.get<SteamCredentialStatus>('/admin/steam-credentials').catch(skipForbidden),
+        api
+          .get<{ definitions: StoredDefinition[]; placeholders: string[] }>('/admin/game-definitions')
+          .catch(skipForbidden),
       ]);
 
       setNodes(nodeResult?.nodes ?? []);
@@ -70,6 +86,8 @@ export default function AdminPage() {
       setAccounts(accountResult?.accounts ?? []);
       setRequests(requestResult?.requests ?? []);
       setSteam(steamResult);
+      setGames(gameResult?.definitions ?? []);
+      setPlaceholders(gameResult?.placeholders ?? []);
       setStepUpNeeded(false);
       setError(null);
     } catch (caught) {
@@ -180,6 +198,15 @@ export default function AdminPage() {
         <NodeAdmin
           nodes={nodes}
           canWrite={can('panel:nodes.write')}
+          onChanged={load}
+          onError={report}
+        />
+      ) : null}
+
+      {can('panel:settings') ? (
+        <GameDefinitions
+          definitions={games}
+          placeholders={placeholders}
           onChanged={load}
           onError={report}
         />

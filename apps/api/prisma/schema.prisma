@@ -99,6 +99,7 @@ model Account {
   notifications     Notification[]
   accessRequests    AccessRequest[] @relation("RequestedBy")
   decidedRequests   AccessRequest[] @relation("DecidedBy")
+  gameDefinitions   GameDefinition[]
 
   @@index([status])
   @@index([discordId])
@@ -598,6 +599,37 @@ model AccessRequest {
   @@index([serverId])
   @@index([status])
   @@map("access_requests")
+}
+
+/* ------------------------------------------------------------------ */
+/* Game definitions                                                    */
+/* ------------------------------------------------------------------ */
+
+/// A game the panel can install and run, described as data.
+///
+/// Uploaded by an administrator rather than compiled in, so adding a title does
+/// not mean editing the panel. Deliberately declarative - there is no install
+/// script field, because an uploaded shell script would be remote code
+/// execution wearing a config file. See packages/shared/src/game-definition.ts.
+model GameDefinition {
+  /// The definition's own id, e.g. "arma3". Also the slug used everywhere else.
+  slug         String   @id
+  name         String
+  version      String   @default("1")
+  /// The validated document. Re-validated on read, never trusted as stored.
+  definition   Json
+  /// Ships with the panel. Cannot be deleted, only overridden.
+  builtIn      Boolean  @default(false)
+  /// Hidden from server creation without being deleted.
+  enabled      Boolean  @default(true)
+
+  uploadedById String?
+  uploadedBy   Account? @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("game_definitions")
 }
 
 /* ------------------------------------------------------------------ */
