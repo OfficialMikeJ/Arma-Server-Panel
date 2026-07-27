@@ -18,6 +18,7 @@ import {
   powerActionSchema,
   resourceAllocationSchema,
   updateServerSchema,
+  type GameId,
 } from '@asp/shared';
 
 import { prisma } from '../db/client.js';
@@ -126,7 +127,11 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
         ...serialiseServer(server),
         ...(state ? { state } : {}),
         description: server.description,
-        config: server.config,
+        // Filled out with the game's own defaults before it leaves. A config
+        // stored before a setting existed has no value for it, and the settings
+        // form would then show an unticked box for something the server is in
+        // fact doing - the schema default is what actually applies at start.
+        config: normaliseConfig(toGameId(server.game), server.config),
         autoStart: server.autoStart,
         autoRestart: server.autoRestart,
         crashRestartLimit: server.crashRestartLimit,
@@ -511,6 +516,21 @@ export async function registerServerRoutes(app: FastifyInstance): Promise<void> 
 /* ------------------------------------------------------------------ */
 /* Serialisation                                                       */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Applies the game's schema defaults to a stored config.
+ *
+ * Returns it untouched if the schema rejects it, so a config that has somehow
+ * drifted out of spec is still visible and repairable in the editor rather than
+ * turning the whole settings page into an error.
+ */
+function normaliseConfig(gameId: GameId, config: unknown): unknown {
+  try {
+    return getAdapter(gameId).validateConfig({}, config as Record<string, unknown>);
+  } catch {
+    return config;
+  }
+}
 
 function serialiseServer(server: {
   id: string;

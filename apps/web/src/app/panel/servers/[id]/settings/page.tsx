@@ -2,17 +2,26 @@
 
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { RESOURCE_LIMITS, formatMemory, formatStorage } from '@asp/shared';
+import { CONFIG_FIELDS, RESOURCE_LIMITS, formatMemory, formatStorage, type GameId } from '@asp/shared';
 import { api, ApiError } from '@/lib/api';
 import { ServerTabs } from '@/components/panel/ServerTabs';
+import { ConfigForm } from '@/components/panel/ConfigForm';
 
 /**
  * Server settings.
  *
- * The game config is edited as JSON rather than a generated form: each title
- * has a different schema, and a hand-rolled form per game would drift out of
- * sync with the adapter. The API validates every key against the game's own
- * schema and returns field-level errors, which are shown inline.
+ * The game config has two interchangeable views: a generated form, and the raw
+ * JSON. The form is built from CONFIG_FIELDS in the shared package rather than
+ * hand-written per game, because a hand-written one drifts out of sync with the
+ * adapter's schema the first time a setting is added - a test in the API
+ * enforces that they match.
+ *
+ * The JSON editor is never taken away. Some settings (mission rotation, mission
+ * headers) are structures no set of controls describes well, and an operator
+ * who knows the format should not have to go through a form to reach them.
+ *
+ * Either way the API validates every key against the game's own schema and
+ * returns field-level errors, which are shown inline and mark the control.
  */
 export default function SettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -30,7 +39,10 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [transferQuotaGib, setTransferQuotaGib] = useState(0);
   const [slots, setSlots] = useState(32);
 
+  const [gameId, setGameId] = useState<GameId>('arma3');
+  const [config, setConfig] = useState<Record<string, unknown>>({});
   const [configText, setConfigText] = useState('{}');
+  const [configMode, setConfigMode] = useState<'form' | 'json'>('form');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,11 +53,28 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
   const [deleteConfirm, setDeleteConfirm] = useState('');
   const [purgeData, setPurgeData] = useState(true);
 
+  const fields = CONFIG_FIELDS[gameId] ?? [];
+  // A game with no descriptors only ever shows the JSON editor, so the saved
+  // payload has to come from the text - not from the form object the operator
+  // never saw. Derived rather than stored, so the two can never disagree.
+  const effectiveMode = fields.length > 0 ? configMode : 'json';
+
+  /** Keeps the form object and the JSON text as two views of one value. */
+  const applyConfig = useCallback((value: unknown) => {
+    const object =
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+    setConfig(object);
+    setConfigText(JSON.stringify(object, null, 2));
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const result = await api.get<{
         server: {
           name: string;
+          game: GameId;
           autoStart: boolean;
           autoRestart: boolean;
           crashRestartLimit: number;
@@ -72,14 +101,15 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
       setBandwidthMbps(server.resources.bandwidthMbps);
       setTransferQuotaGib(server.resources.transferQuotaGib);
       setSlots(server.resources.slots);
-      setConfigText(JSON.stringify(server.config, null, 2));
+      setGameId(server.game);
+      applyConfig(server.config);
       setError(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : 'Could not load settings.');
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, applyConfig]);
 
   useEffect(() => {
     void load();
@@ -151,24 +181,61 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
     setError(null);
     setDetails([]);
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(configText);
-    } catch {
-      setError('That is not valid JSON.');
-      setBusy(null);
-      return;
+    // Whichever view is open is the one being saved. The other is regenerated
+    // from whatever the server returns, so the two can never disagree.
+    let payload: unknown;
+    if (effectiveMode === 'json') {
+      try {
+        payload = JSON.parse(configText);
+      } catch {
+        setError('That is not valid JSON.');
+        setBusy(null);
+        return;
+      }
+    } else {
+      payload = config;
     }
 
     try {
-      const result = await api.patch<{ config: unknown }>(`/servers/${id}/config`, parsed);
-      setConfigText(JSON.stringify(result.config, null, 2));
+      const result = await api.patch<{ config: unknown }>(`/servers/${id}/config`, payload);
+      applyConfig(result.config);
       setNotice('Configuration saved. Restart to apply.');
     } catch (caught) {
       fail(caught, 'Could not save the configuration.');
     } finally {
       setBusy(null);
     }
+  }
+
+  /**
+   * Switches view, carrying the current edits across.
+   *
+   * Moving to JSON re-serialises the form object. Moving back parses the text,
+   * and refuses if it is not valid - silently discarding what someone typed
+   * because a brace was missing would be worse than making them fix it.
+   */
+  function switchConfigMode(next: 'form' | 'json') {
+    if (next === effectiveMode) return;
+
+    if (next === 'json') {
+      setConfigText(JSON.stringify(config, null, 2));
+    } else {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(configText);
+      } catch {
+        setError('The JSON is not valid, so it cannot be shown as a form yet.');
+        return;
+      }
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        setError('The configuration must be a JSON object.');
+        return;
+      }
+      setConfig(parsed as Record<string, unknown>);
+    }
+
+    setError(null);
+    setConfigMode(next);
   }
 
   if (loading) {
@@ -273,17 +340,57 @@ export default function SettingsPage({ params }: { params: Promise<{ id: string 
 
       {/* ---- Game config ---- */}
       <section className="card space-y-3">
-        <h2 className="text-sm font-bold uppercase tracking-wide">Game configuration</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-bold uppercase tracking-wide">Game configuration</h2>
+
+          {fields.length > 0 ? (
+            <div className="flex rounded-md border border-ink-300 p-0.5" role="tablist">
+              {(['form', 'json'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={configMode === mode}
+                  className={`rounded px-3 py-1 text-xs font-semibold uppercase tracking-wide transition ${
+                    configMode === mode
+                      ? 'bg-brand-500 text-ink-100'
+                      : 'text-ink-700 hover:text-ink-900'
+                  }`}
+                  onClick={() => switchConfigMode(mode)}
+                >
+                  {mode === 'form' ? 'Settings' : 'JSON'}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
         <p className="text-xs leading-relaxed text-ink-700">
-          Validated against this game&apos;s own schema. Invalid keys or out-of-range values are
-          rejected with the exact field named.
+          {fields.length === 0
+            ? 'This game has no guided settings yet, so its configuration is edited directly.'
+            : 'Both views edit the same configuration. Whichever is open is what gets saved.'}{' '}
+          Everything is validated against this game&apos;s own schema — invalid keys or out-of-range
+          values are rejected with the exact field named.
         </p>
-        <textarea
-          className="input h-80 font-mono text-[12px] leading-relaxed"
-          value={configText}
-          onChange={(event) => setConfigText(event.target.value)}
-          spellCheck={false}
-        />
+
+        {effectiveMode === 'form' ? (
+          <ConfigForm
+            fields={fields}
+            config={config}
+            onChange={setConfig}
+            invalidPaths={details.map((detail) => detail.path)}
+            disabled={busy !== null}
+          />
+        ) : (
+          <textarea
+            className="input h-80 font-mono text-[12px] leading-relaxed"
+            value={configText}
+            onChange={(event) => setConfigText(event.target.value)}
+            spellCheck={false}
+            aria-label="Game configuration as JSON"
+          />
+        )}
+
         <button type="button" className="btn-primary w-full" onClick={() => void saveConfig()} disabled={busy !== null}>
           {busy === 'config' ? 'Saving…' : 'Save configuration'}
         </button>

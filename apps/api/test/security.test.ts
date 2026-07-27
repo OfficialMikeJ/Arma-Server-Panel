@@ -34,6 +34,153 @@ const { GAMES, PORT_ALLOCATION } = await import('@asp/shared');
 const { renderServerCfg, arma3Adapter } = await import(
   '../src/modules/games/adapters/arma3.js'
 );
+const { reforgerAdapter } = await import('../src/modules/games/adapters/reforger.js');
+const { CONFIG_FIELDS, getConfigValue, setConfigValue, unmappedConfigKeys } = await import(
+  '@asp/shared'
+);
+
+/* ------------------------------------------------------------------ */
+
+describe('Config field descriptors', () => {
+  const adapters = { arma3: arma3Adapter, reforger: reforgerAdapter } as const;
+
+  /**
+   * Settings that stay JSON-only, and why. Anything not listed here must have a
+   * form field, so adding a setting to an adapter without one fails the build.
+   */
+  const JSON_ONLY = new Set([
+    // An array of {template, difficulty} objects - a repeater, not a control.
+    'missions',
+    // Free-form key/value pairs passed straight to the scenario.
+    'missionHeader',
+    // A fixed enum list where the sensible combinations are already covered by
+    // the cross-platform toggle.
+    'supportedPlatforms',
+  ]);
+
+  for (const [gameId, adapter] of Object.entries(adapters)) {
+    const fields = CONFIG_FIELDS[gameId as 'arma3' | 'reforger'];
+    const defaults = adapter.defaultConfig({ name: 'Test', slots: 32 }) as Record<string, unknown>;
+
+    it(`${gameId}: every described field exists in the schema`, () => {
+      for (const field of fields) {
+        // adminPassword is optional on Reforger, so it is absent from the
+        // defaults; its parent must still resolve.
+        const [root] = field.key.split('.');
+        assert.ok(
+          root !== undefined && root in defaults,
+          `${gameId} has a form field for "${field.key}" that its config does not contain`,
+        );
+      }
+    });
+
+    it(`${gameId}: describes every scalar the schema produces`, () => {
+      const described = new Set(fields.map((f) => f.key));
+
+      // Walks nested objects too. A setting added inside difficulty.* would
+      // otherwise slip through: the form would not show it, and nothing would
+      // say so. Arrays stop the walk - a list is described by one field, and
+      // an array of objects is legitimately JSON-only.
+      const missing: string[] = [];
+      const walk = (value: unknown, prefix: string) => {
+        if (Array.isArray(value)) {
+          if (!described.has(prefix)) missing.push(prefix);
+          return;
+        }
+        if (typeof value === 'object' && value !== null) {
+          for (const [key, child] of Object.entries(value)) {
+            walk(child, prefix ? `${prefix}.${key}` : key);
+          }
+          return;
+        }
+        if (!described.has(prefix)) missing.push(prefix);
+      };
+      walk(defaults, '');
+
+      assert.deepEqual(
+        missing.filter((key) => !JSON_ONLY.has(key)),
+        [],
+        `${gameId} config keys with no form field: ${missing.join(', ')}`,
+      );
+    });
+
+    it(`${gameId}: select options cover the current value`, () => {
+      for (const field of fields) {
+        if (field.kind !== 'select') continue;
+        const value = getConfigValue(defaults, field.key);
+        if (value === undefined) continue;
+        assert.ok(
+          field.options.some((option) => option.value === value),
+          `${gameId} field "${field.key}" defaults to ${JSON.stringify(value)}, which is not one of its options`,
+        );
+      }
+    });
+
+    it(`${gameId}: toggle values match what the schema stores`, () => {
+      for (const field of fields) {
+        if (field.kind !== 'toggle') continue;
+        const value = getConfigValue(defaults, field.key);
+        if (value === undefined) continue;
+        assert.ok(
+          value === field.trueValue || value === field.falseValue,
+          `${gameId} field "${field.key}" defaults to ${JSON.stringify(value)}, which is neither of its toggle values`,
+        );
+      }
+    });
+
+    it(`${gameId}: a form round trip still validates`, () => {
+      // Walk every field, write its current value straight back, and confirm
+      // the adapter still accepts the result. Catches a descriptor whose path
+      // is wrong: setConfigValue would create a new key instead of updating.
+      let round: Record<string, unknown> = { ...defaults };
+      for (const field of fields) {
+        const value = getConfigValue(round, field.key);
+        if (value === undefined) continue;
+        round = setConfigValue(round, field.key, value);
+      }
+      assert.doesNotThrow(() => adapter.validateConfig(round, defaults));
+      assert.deepEqual(round, defaults, 'a round trip through the form changed the config');
+    });
+  }
+
+  it('reports keys the form does not cover', () => {
+    const unmapped = unmappedConfigKeys(
+      { hostname: 'x', missions: [], somethingNew: 1 },
+      CONFIG_FIELDS.arma3,
+    );
+    assert.deepEqual(unmapped, ['missions', 'somethingNew']);
+  });
+
+  it('has no descriptors for an unreleased title', () => {
+    assert.equal(CONFIG_FIELDS.arma4.length, 0);
+  });
+});
+
+describe('Config path helpers', () => {
+  it('reads and writes nested paths', () => {
+    const source = { a: { b: { c: 1 } }, top: 'x' };
+    assert.equal(getConfigValue(source, 'a.b.c'), 1);
+    assert.equal(getConfigValue(source, 'a.b.missing'), undefined);
+    assert.equal(getConfigValue(source, 'top.nope'), undefined);
+
+    const next = setConfigValue(source, 'a.b.c', 2);
+    assert.equal(next.a.b.c, 2);
+    // The original must be untouched - React state depends on it.
+    assert.equal(source.a.b.c, 1);
+    assert.notEqual(next.a, source.a);
+    assert.equal(next.top, 'x');
+  });
+
+  it('creates missing intermediate objects rather than throwing', () => {
+    const next = setConfigValue({}, 'x.y.z', 5);
+    assert.deepEqual(next, { x: { y: { z: 5 } } });
+  });
+
+  it('does not descend into an array as if it were an object', () => {
+    const next = setConfigValue({ list: [1, 2] }, 'list.other', 3);
+    assert.deepEqual(next, { list: { other: 3 } });
+  });
+});
 
 /* ------------------------------------------------------------------ */
 

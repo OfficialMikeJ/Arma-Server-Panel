@@ -28,7 +28,9 @@ const workshopIdSchema = z
 const configSchema = z.object({
   serverName: z.string().min(1).max(100),
   serverPassword: z.string().max(64).default(''),
-  adminPassword: z.string().max(64).optional(),
+  // No adminPassword here on purpose. writeConfig takes `passwordAdmin` from
+  // the server's encrypted secrets envelope, so a value in the config was only
+  // ever decorative - an operator could set one, save, and have it do nothing.
   maxPlayers: z.number().int().min(1).max(game.maxSlots),
   visible: z.boolean().default(true),
   crossPlatform: z.boolean().default(true),
